@@ -20,6 +20,7 @@ cd ccs/units/vumeter && make        # → build/vumeter.unt
 | `unit.mk`, `unit.ld` | shared build rules and linker script |
 | `common/unitrt.c` | `memcpy`/`memset`/`memmove`/`memcmp` linked into every unit |
 | `tools/mkunit.py` | ELF → `.unt` converter |
+| `doc/unit-abi-overview.pdf` | printable ABI overview; regenerate with `tools/abi_overview.py` (needs reportlab) |
 | `vumeter/` | example: level meters on a Launchpad Mini MK3 |
 | `drums/` | example: drum sampler playing WAV files from `/samples/drums` (built-in kit as fallback) |
 | `../wormhole/src/unitloader.c` | the firmware side |
