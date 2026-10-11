@@ -1,10 +1,22 @@
 /*
- * Drums — a basic drum sampler with a fixed, built-in kit.
+ * Drums — a drum sampler that plays WAV files from the SD card.
  *
- * The eleven sounds are rendered once when the unit loads (808-style synthesis: pitch-swept
- * sines, filtered noise and the six-square "metal" oscillator for hats and cymbals) into 16-bit
- * sample buffers at 48 kHz, and played back from there. Each sound has a trigger parameter;
- * map MIDI notes to them in [midimap], and the note velocity sets the level:
+ * Put WAV files in /samples/drums on the SD card; each file becomes a trigger parameter named
+ * after it (lower case, other characters become '_'). One level of subfolders is allowed, and
+ * each subfolder is a choke group: its sounds cut each other off, like closed and open hats.
+ *
+ *   /samples/drums/kick.wav            -> drums:kick
+ *   /samples/drums/Snare 01.wav        -> drums:snare_01
+ *   /samples/drums/hats/closed.wav     -> drums:hats_closed   } choke group "hats"
+ *   /samples/drums/hats/open.wav       -> drums:hats_open     }
+ *
+ * WAV: PCM 8/16/24/32-bit or 32-bit float, mono or stereo (extra channels are ignored), any
+ * sample rate (resampled to 48 kHz on load), up to 20 seconds and 32 sounds. Samples are read
+ * when the unit loads, so reboot after changing them. Without usable WAV files the unit
+ * falls back to a built-in synthesised kit (kick, snare, rim, clap, closedhat, openhat,
+ * lowtom, midtom, hightom, cowbell, crash).
+ *
+ * Map MIDI notes to the sounds in [midimap]; the velocity sets the level:
  *
  *   [units]
  *   drums Drums
@@ -12,41 +24,79 @@
  *   drums:1 .Scarlett_2i2_USB:1 1.0
  *   drums:2 .Scarlett_2i2_USB:2 1.0
  *   [midimap]
- *   .device:noteon36 drums:kick          # General MIDI drum notes
- *   .device:noteon38 drums:snare
- *   .device:noteon42 drums:closedhat
- *   .device:noteon46 drums:openhat
+ *   .device:noteon36 drums:kick
+ *   .device:noteon38 drums:snare_01
  *   .nanoKONTROL2:cc0 drums:volume
  *
  * Outputs 1 and 2 are left and right. Up to 16 sounds play at once (the oldest is cut when
- * more are triggered); the closed hat chokes the open hat.
+ * more are triggered).
  */
 #include <unit_abi.h>
 
 UNIT_DECLARE("Drums");
 
+#define SAMPLE_FOLDER       "/samples/drums"
 #define SAMPLE_RATE         48000
+#define MAX_SOUNDS          32
+#define MAX_GROUPS          16
+#define MAX_SECONDS         20
 #define MAX_INSTANCES       2
 #define MAX_VOICES          16
-#define CHOKE_FADE_SAMPLES  96          // 2 ms fade when a voice is choked or stolen
+#define CHOKE_FADE_SAMPLES  96          // 2 ms fade when a voice is choked
 #define PI                  3.14159265F
 
-enum Sound {
-    KICK, SNARE, RIM, CLAP, CLOSED_HAT, OPEN_HAT, LOW_TOM, MID_TOM, HIGH_TOM, COWBELL, CRASH,
-    NUM_SOUNDS
+// A loaded sound: 16-bit samples at 48 kHz, interleaved when stereo.
+struct Sound {
+    char name[UNIT_NAME_LENGTH];        // parameter name
+    const int16_t * data;
+    uint32_t frames;
+    uint8_t channels;                   // 1 or 2
+    uint8_t chokeGroup;                 // 0 = none
+    float gainLeft, gainRight;
 };
 
-#define PARAM_VOLUME        NUM_SOUNDS  // parameter index after the triggers
+static struct Sound sounds[MAX_SOUNDS];
+static int soundCount;
+static const UnitHostApi * api;
 
-struct SoundInfo {
+static void copyString(char * dest, const char * src, size_t maxLength) {
+    size_t i = 0;
+    for (; src[i] && i + 1 < maxLength; i++) {
+        dest[i] = src[i];
+    }
+    if (maxLength) {
+        dest[i] = 0;
+    }
+}
+
+static int stringsEqual(const char * a, const char * b) {
+    while (*a && *a == *b) {
+        a++;
+        b++;
+    }
+    return *a == *b;
+}
+
+static char lowerCase(char c) {
+    return c >= 'A' && c <= 'Z' ? c - 'A' + 'a' : c;
+}
+
+// =============================================================================================
+// Built-in kit (used when there are no WAV files)
+// =============================================================================================
+
+enum KitSound {
+    KICK, SNARE, RIM, CLAP, CLOSED_HAT, OPEN_HAT, LOW_TOM, MID_TOM, HIGH_TOM, COWBELL, CRASH,
+    NUM_KIT_SOUNDS
+};
+
+static const struct {
     const char * name;
     float seconds;          // rendered length
     float level;            // mix balance
     float panLeft, panRight;// constant-power pan gains
-    int chokeGroup;         // sounds in the same non-zero group cut each other off
-};
-
-static const struct SoundInfo sounds[NUM_SOUNDS] = {
+    int chokeGroup;
+} kitInfo[NUM_KIT_SOUNDS] = {
     [KICK]       = { "kick",      0.50F, 1.00F, 0.707F, 0.707F, 0 },
     [SNARE]      = { "snare",     0.35F, 0.80F, 0.707F, 0.707F, 0 },
     [RIM]        = { "rim",       0.08F, 0.50F, 0.809F, 0.588F, 0 },
@@ -59,12 +109,6 @@ static const struct SoundInfo sounds[NUM_SOUNDS] = {
     [COWBELL]    = { "cowbell",   0.40F, 0.45F, 0.852F, 0.523F, 0 },
     [CRASH]      = { "crash",     1.50F, 0.50F, 0.490F, 0.872F, 0 },
 };
-
-// Rendered kit: all sounds back to back. Must hold the sum of sounds[].seconds (5.55 s).
-#define KIT_SAMPLES         (SAMPLE_RATE * 556 / 100)
-static int16_t kit[KIT_SAMPLES];
-static const int16_t * sampleData[NUM_SOUNDS];
-static uint32_t sampleLength[NUM_SOUNDS];
 
 // --- Synthesis helpers (no libm in units) ---------------------------------------------------
 
@@ -154,7 +198,7 @@ static float tom(struct Synth * s, float hz, float tau, uint32_t i) {
 }
 
 // One sample of a sound; i counts samples from the start.
-static float synthesize(enum Sound sound, struct Synth * s, uint32_t i) {
+static float synthesize(enum KitSound sound, struct Synth * s, uint32_t i) {
     float t = (float)i / SAMPLE_RATE;
     switch (sound) {
     case KICK: {
@@ -228,7 +272,7 @@ static float synthesize(enum Sound sound, struct Synth * s, uint32_t i) {
 }
 
 // Render a sound twice: first to find its peak, then normalised into 16-bit samples.
-static void renderSound(enum Sound sound, int16_t * out, uint32_t length) {
+static void renderSound(enum KitSound sound, int16_t * out, uint32_t length) {
     struct Synth s;
     float peak = 0;
     for (int pass = 0; pass < 2; pass++) {
@@ -253,25 +297,384 @@ static void renderSound(enum Sound sound, int16_t * out, uint32_t length) {
     }
 }
 
-static void renderKit(void) {
-    uint32_t offset = 0;
-    for (int sound = 0; sound < NUM_SOUNDS; sound++) {
-        uint32_t length = (uint32_t)(sounds[sound].seconds * SAMPLE_RATE);
-        if (offset + length > KIT_SAMPLES) {
-            length = KIT_SAMPLES - offset;
+
+static void loadBuiltinKit(void) {
+    for (int k = 0; k < NUM_KIT_SOUNDS; k++) {
+        uint32_t frames = (uint32_t)(kitInfo[k].seconds * SAMPLE_RATE);
+        int16_t * data = api->allocate(frames * sizeof(int16_t));
+        if (!data) {
+            return;
         }
-        renderSound(sound, kit + offset, length);
-        sampleData[sound] = kit + offset;
-        sampleLength[sound] = length;
-        offset += length;
+        renderSound(k, data, frames);
+        struct Sound * s = &sounds[soundCount++];
+        copyString(s->name, kitInfo[k].name, sizeof(s->name));
+        s->data = data;
+        s->frames = frames;
+        s->channels = 1;
+        s->chokeGroup = kitInfo[k].chokeGroup;
+        s->gainLeft = kitInfo[k].level * kitInfo[k].panLeft;
+        s->gainRight = kitInfo[k].level * kitInfo[k].panRight;
     }
 }
 
-// --- Playback -----------------------------------------------------------------------------
+// =============================================================================================
+// WAV files
+// =============================================================================================
+
+#define WAVE_FORMAT_PCM         1
+#define WAVE_FORMAT_IEEE_FLOAT  3
+#define WAVE_FORMAT_EXTENSIBLE  0xFFFE
+
+struct Wav {
+    uint16_t format;
+    uint16_t channels;
+    uint32_t sampleRate;
+    uint16_t bitsPerSample;
+    uint16_t blockAlign;
+    uint32_t dataOffset;
+    uint32_t frames;
+};
+
+static uint16_t le16(const uint8_t * p) { return p[0] | p[1] << 8; }
+static uint32_t le32(const uint8_t * p) { return p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24; }
+
+static int fourcc(const uint8_t * p, const char * id) {
+    return p[0] == id[0] && p[1] == id[1] && p[2] == id[2] && p[3] == id[3];
+}
+
+// Walk the RIFF chunks for "fmt " and "data". Returns an error message or 0.
+static const char * parseWav(const char * path, int32_t fileSize, struct Wav * wav) {
+    uint8_t buf[40];
+    if (fileSize < 44 || api->readFile(path, 0, buf, 12) != 12 || !fourcc(buf, "RIFF") || !fourcc(buf + 8, "WAVE")) {
+        return "not a WAV file";
+    }
+    int haveFormat = 0;
+    uint32_t offset = 12;
+    while (offset + 8 <= (uint32_t)fileSize) {
+        if (api->readFile(path, offset, buf, 8) != 8) {
+            return "read error";
+        }
+        uint32_t size = le32(buf + 4);
+        if (fourcc(buf, "fmt ")) {
+            uint32_t n = size < sizeof(buf) ? size : sizeof(buf);
+            if (n < 16 || api->readFile(path, offset + 8, buf, n) != (int32_t)n) {
+                return "bad fmt chunk";
+            }
+            wav->format = le16(buf);
+            wav->channels = le16(buf + 2);
+            wav->sampleRate = le32(buf + 4);
+            wav->blockAlign = le16(buf + 12);
+            wav->bitsPerSample = le16(buf + 14);
+            if (wav->format == WAVE_FORMAT_EXTENSIBLE && n >= 26) {
+                wav->format = le16(buf + 24);       // first two bytes of the SubFormat GUID
+            }
+            haveFormat = 1;
+        } else if (fourcc(buf, "data")) {
+            if (!haveFormat) {
+                return "data before fmt";
+            }
+            wav->dataOffset = offset + 8;
+            uint32_t available = (uint32_t)fileSize - wav->dataOffset;
+            if (size > available) {
+                size = available;                   // truncated file, or size left at 0xFFFFFFFF
+            }
+            if (wav->blockAlign == 0) {
+                return "bad block size";
+            }
+            wav->frames = size / wav->blockAlign;
+            break;
+        }
+        offset += 8 + size + (size & 1);           // chunks are padded to even sizes
+    }
+    if (!wav->dataOffset) {
+        return "no audio data";
+    }
+    int bits = wav->bitsPerSample;
+    if (!((wav->format == WAVE_FORMAT_PCM && (bits == 8 || bits == 16 || bits == 24 || bits == 32)) ||
+          (wav->format == WAVE_FORMAT_IEEE_FLOAT && bits == 32))) {
+        return "unsupported sample format (use PCM or 32-bit float)";
+    }
+    if (wav->channels < 1 || wav->blockAlign != wav->channels * bits / 8) {
+        return "bad channel layout";
+    }
+    if (wav->sampleRate < 4000 || wav->sampleRate > 384000) {
+        return "unsupported sample rate";
+    }
+    if (wav->frames == 0) {
+        return "empty";
+    }
+    return 0;
+}
+
+// Sequential reader with a small buffer; frames are read in increasing order.
+#define READ_BUFFER_SIZE 8192
+static uint8_t readBuffer[READ_BUFFER_SIZE];
+
+struct FrameReader {
+    const char * path;
+    const struct Wav * wav;
+    uint32_t first, count;              // frames currently in readBuffer
+};
+
+static float decodeSample(const struct Wav * wav, const uint8_t * p) {
+    switch (wav->bitsPerSample) {
+    case 8:  return ((int)p[0] - 128) * (1.0F / 128.0F);
+    case 16: return (int16_t)le16(p) * (1.0F / 32768.0F);
+    case 24: return (int32_t)((uint32_t)p[0] << 8 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 24) * (1.0F / 2147483648.0F);
+    default:
+        if (wav->format == WAVE_FORMAT_IEEE_FLOAT) {
+            union { uint32_t u; float f; } v = { .u = le32(p) };
+            return v.f;
+        }
+        return (int32_t)le32(p) * (1.0F / 2147483648.0F);
+    }
+}
+
+// Left and right of frame `index` (mono files give the same value twice).
+static int readFrame(struct FrameReader * r, uint32_t index, float * left, float * right) {
+    if (index >= r->wav->frames) {
+        index = r->wav->frames - 1;
+    }
+    if (index < r->first || index >= r->first + r->count) {
+        uint32_t perBuffer = READ_BUFFER_SIZE / r->wav->blockAlign;
+        uint32_t count = r->wav->frames - index < perBuffer ? r->wav->frames - index : perBuffer;
+        int32_t got = api->readFile(r->path, r->wav->dataOffset + index * r->wav->blockAlign, readBuffer, count * r->wav->blockAlign);
+        if (got < (int32_t)r->wav->blockAlign) {
+            return 0;
+        }
+        r->first = index;
+        r->count = got / r->wav->blockAlign;
+    }
+    const uint8_t * frame = readBuffer + (index - r->first) * r->wav->blockAlign;
+    *left = decodeSample(r->wav, frame);
+    *right = r->wav->channels > 1 ? decodeSample(r->wav, frame + r->wav->bitsPerSample / 8) : *left;
+    return 1;
+}
+
+static int16_t toInt16(float x) {
+    x *= 32768.0F;
+    return x >= 32767.0F ? 32767 : x <= -32768.0F ? -32768 : (int16_t)x;
+}
+
+static const char * loadWav(const char * path, int32_t fileSize, struct Sound * sound) {
+    struct Wav wav = {0};
+    const char * error = parseWav(path, fileSize, &wav);
+    if (error) {
+        return error;
+    }
+    int channels = wav.channels > 1 ? 2 : 1;
+    // Resample to 48 kHz by linear interpolation, stepping through the source in 32.32 fixed point.
+    uint64_t step = ((uint64_t)wav.sampleRate << 32) / SAMPLE_RATE;
+    uint64_t frames64 = (((uint64_t)(wav.frames - 1) << 32) / step) + 1;
+    uint32_t frames = frames64 > (uint64_t)MAX_SECONDS * SAMPLE_RATE ? MAX_SECONDS * SAMPLE_RATE : (uint32_t)frames64;
+    int16_t * data = api->allocate(frames * channels * sizeof(int16_t));
+    if (!data) {
+        return "out of memory";
+    }
+    struct FrameReader reader = { .path = path, .wav = &wav };
+    uint64_t position = 0;
+    for (uint32_t i = 0; i < frames; i++, position += step) {
+        uint32_t index = (uint32_t)(position >> 32);
+        float frac = (uint32_t)position * (1.0F / 4294967296.0F);
+        float l0, r0, l1 = 0, r1 = 0;
+        if (!readFrame(&reader, index, &l0, &r0) || (frac > 0 && !readFrame(&reader, index + 1, &l1, &r1))) {
+            return "read error";
+        }
+        float l = frac > 0 ? l0 + (l1 - l0) * frac : l0;
+        float r = frac > 0 ? r0 + (r1 - r0) * frac : r0;
+        if (channels == 2) {
+            data[2 * i] = toInt16(l);
+            data[2 * i + 1] = toInt16(r);
+        } else {
+            data[i] = toInt16(l);
+        }
+    }
+    sound->data = data;
+    sound->frames = frames;
+    sound->channels = channels;
+    sound->gainLeft = sound->gainRight = 1.0F;
+    api->log("Drums: %s (%d Hz, %d-bit, %s, %d ms)", sound->name, (int)wav.sampleRate, wav.bitsPerSample,
+             wav.channels == 1 ? "mono" : "stereo", (int)(frames / (SAMPLE_RATE / 1000)));
+    return 0;
+}
+
+// =============================================================================================
+// Scanning the sample folder
+// =============================================================================================
+
+struct Candidate {
+    char path[160];
+    char name[UNIT_NAME_LENGTH];
+    int32_t size;
+    uint8_t group;
+};
+
+static struct Candidate candidates[MAX_SOUNDS];
+static int candidateCount;
+static char groupNames[MAX_GROUPS][64];
+static int groupCount;
+
+static int isWav(const char * name) {
+    size_t n = 0;
+    while (name[n]) {
+        n++;
+    }
+    return n > 4 && name[n - 4] == '.' && lowerCase(name[n - 3]) == 'w' && lowerCase(name[n - 2]) == 'a' && lowerCase(name[n - 1]) == 'v';
+}
+
+// "Snare 01.wav" in group "hats" -> "hats_snare_01": lower case, runs of other characters -> '_'
+static void parameterName(char * out, const char * group, const char * file) {
+    size_t n = 0;
+    const char * parts[2] = { group, file };
+    for (int p = 0; p < 2; p++) {
+        if (!parts[p]) {
+            continue;
+        }
+        if (n > 0 && n + 1 < UNIT_NAME_LENGTH && out[n - 1] != '_') {
+            out[n++] = '_';
+        }
+        const char * end = parts[p];
+        while (*end) {
+            end++;
+        }
+        if (p == 1) {
+            end -= 4;                   // drop ".wav"
+        }
+        for (const char * c = parts[p]; c < end && n + 1 < UNIT_NAME_LENGTH; c++) {
+            char ch = lowerCase(*c);
+            int ok = (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9');
+            if (ok) {
+                out[n++] = ch;
+            } else if (n > 0 && out[n - 1] != '_') {
+                out[n++] = '_';
+            }
+        }
+    }
+    while (n > 0 && out[n - 1] == '_') {
+        n--;
+    }
+    if (n == 0) {
+        out[n++] = 's';
+    }
+    out[n] = 0;
+}
+
+static int nameTaken(const char * name, int upTo) {
+    if (stringsEqual(name, "volume")) {
+        return 1;
+    }
+    for (int i = 0; i < upTo; i++) {
+        if (stringsEqual(candidates[i].name, name)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void addCandidate(const char * directory, const UnitDirectoryEntry * entry, int group) {
+    if (candidateCount == MAX_SOUNDS) {
+        api->log("Drums: more than %d sounds, ignoring %s/%s", MAX_SOUNDS, directory, entry->name);
+        return;
+    }
+    struct Candidate * c = &candidates[candidateCount];
+    char * p = c->path;
+    for (const char * s = directory; *s; s++) *p++ = *s;
+    *p++ = '/';
+    for (const char * s = entry->name; *s && p < c->path + sizeof(c->path) - 1; s++) *p++ = *s;
+    *p = 0;
+    parameterName(c->name, group ? groupNames[group - 1] : 0, entry->name);
+    // Make the name unique: snare, snare_2, snare_3, ...
+    if (nameTaken(c->name, candidateCount)) {
+        char base[UNIT_NAME_LENGTH];
+        copyString(base, c->name, sizeof(base) - 3);
+        for (int n = 2; nameTaken(c->name, candidateCount) && n < 100; n++) {
+            size_t len = 0;
+            while (base[len]) {
+                c->name[len] = base[len];
+                len++;
+            }
+            c->name[len++] = '_';
+            if (n >= 10) {
+                c->name[len++] = '0' + n / 10;
+            }
+            c->name[len++] = '0' + n % 10;
+            c->name[len] = 0;
+        }
+    }
+    c->size = entry->size;
+    c->group = group;
+    candidateCount++;
+}
+
+static void scanDirectory(const char * directory, int group) {
+    UnitDirectoryEntry entry;
+    for (uint32_t i = 0; api->readDirectory(directory, i, &entry) == 1; i++) {
+        if (entry.name[0] == '.') {
+            continue;                   // hidden, and macOS "._name" metadata files
+        }
+        if (entry.isDirectory) {
+            if (group == 0 && groupCount < MAX_GROUPS) {
+                copyString(groupNames[groupCount++], entry.name, sizeof(groupNames[0]));
+            }
+        } else if (isWav(entry.name)) {
+            addCandidate(directory, &entry, group);
+        }
+    }
+}
+
+static void loadSampleFolder(void) {
+    UnitDirectoryEntry probe;
+    if (api->readDirectory(SAMPLE_FOLDER, 0, &probe) < 0) {
+        api->log("Drums: no %s folder on the SD card", SAMPLE_FOLDER);
+        return;
+    }
+    scanDirectory(SAMPLE_FOLDER, 0);
+    for (int g = 0; g < groupCount; g++) {
+        char path[160];
+        char * p = path;
+        for (const char * s = SAMPLE_FOLDER "/"; *s; s++) *p++ = *s;
+        for (const char * s = groupNames[g]; *s; s++) *p++ = *s;
+        *p = 0;
+        scanDirectory(path, g + 1);
+    }
+
+    // Sort by parameter name so the parameter order doesn't depend on the order on disk.
+    for (int i = 1; i < candidateCount; i++) {
+        struct Candidate c = candidates[i];
+        int j = i - 1;
+        while (j >= 0) {
+            const char * a = candidates[j].name;
+            const char * b = c.name;
+            while (*a && *a == *b) { a++; b++; }
+            if ((uint8_t)*a <= (uint8_t)*b) {
+                break;
+            }
+            candidates[j + 1] = candidates[j];
+            j--;
+        }
+        candidates[j + 1] = c;
+    }
+
+    for (int i = 0; i < candidateCount; i++) {
+        struct Sound * sound = &sounds[soundCount];
+        *sound = (struct Sound) { .chokeGroup = candidates[i].group };
+        copyString(sound->name, candidates[i].name, sizeof(sound->name));
+        const char * error = loadWav(candidates[i].path, candidates[i].size, sound);
+        if (error) {
+            api->log("Drums: skipping %s: %s", candidates[i].path, error);
+        } else {
+            soundCount++;
+        }
+    }
+}
+
+// =============================================================================================
+// Playback
+// =============================================================================================
 
 struct Voice {
     int active;
-    enum Sound sound;
+    int sound;
     uint32_t position;
     uint32_t age;           // trigger order, for stealing the oldest voice
     float gain;
@@ -286,23 +689,17 @@ struct Instance {
 };
 
 static struct Instance instances[MAX_INSTANCES];
-static const UnitHostApi * api;
 
-static void stopVoice(struct Voice * v) {
-    if (v->active && !v->fade) {
-        v->fade = CHOKE_FADE_SAMPLES;
-    }
-}
-
-static void trigger(struct Instance * inst, enum Sound sound, uint8_t velocity) {
+static void trigger(struct Instance * inst, int sound, uint8_t velocity) {
     if (velocity == 0) {
         return;             // note-on with velocity 0 is a note-off
     }
-    if (sounds[sound].chokeGroup) {
+    int group = sounds[sound].chokeGroup;
+    if (group) {
         for (int v = 0; v < MAX_VOICES; v++) {
             struct Voice * voice = &inst->voices[v];
-            if (voice->active && sounds[voice->sound].chokeGroup == sounds[sound].chokeGroup) {
-                stopVoice(voice);
+            if (voice->active && !voice->fade && sounds[voice->sound].chokeGroup == group) {
+                voice->fade = CHOKE_FADE_SAMPLES;
             }
         }
     }
@@ -326,7 +723,7 @@ static void trigger(struct Instance * inst, enum Sound sound, uint8_t velocity) 
         .active = 1,
         .sound = sound,
         .age = ++inst->triggerCount,
-        .gain = sounds[sound].level * v * (0.5F + 0.5F * v),
+        .gain = v * (0.5F + 0.5F * v),
     };
 }
 
@@ -341,9 +738,9 @@ static void process(void * instance, UnitProcessHost * host,
     }
     for (size_t c = 0; c < parameterChangeCount; c++) {
         int index = parameterChanges[c].parameterId - 1;
-        if (index >= 0 && index < NUM_SOUNDS) {
+        if (index >= 0 && index < soundCount) {
             trigger(inst, index, parameterChanges[c].midiValue);
-        } else if (index == PARAM_VOLUME) {
+        } else if (index == soundCount) {
             inst->volume = parameterChanges[c].midiValue / 127.0F;
         }
     }
@@ -356,41 +753,37 @@ static void process(void * instance, UnitProcessHost * host,
         if (!voice->active) {
             continue;
         }
-        const struct SoundInfo * info = &sounds[voice->sound];
-        const int16_t * data = sampleData[voice->sound];
-        uint32_t length = sampleLength[voice->sound];
-        float gainLeft = voice->gain * info->panLeft * toFloat;
-        float gainRight = voice->gain * info->panRight * toFloat;
+        const struct Sound * sound = &sounds[voice->sound];
+        const int16_t * data = sound->data;
+        int stereo = sound->channels == 2;
+        float gainLeft = voice->gain * sound->gainLeft * toFloat;
+        float gainRight = voice->gain * sound->gainRight * toFloat;
         for (size_t i = 0; i < frameCount; i++) {
-            if (voice->position >= length) {
+            if (voice->position >= sound->frames) {
                 voice->active = 0;
                 break;
             }
-            float x = data[voice->position++];
+            uint32_t p = voice->position++;
+            float l = stereo ? data[2 * p] : data[p];
+            float r = stereo ? data[2 * p + 1] : l;
             if (voice->fade) {
-                x *= (float)voice->fade / CHOKE_FADE_SAMPLES;
+                float f = (float)voice->fade / CHOKE_FADE_SAMPLES;
+                l *= f;
+                r *= f;
                 if (--voice->fade == 0) {
                     voice->active = 0;
                     break;
                 }
             }
-            left[i] += x * gainLeft;
-            right[i] += x * gainRight;
+            left[i] += l * gainLeft;
+            right[i] += r * gainRight;
         }
     }
 }
 
-// --- Plugin interface -----------------------------------------------------------------------
-
-static void copyString(char * dest, const char * src, size_t maxLength) {
-    size_t i = 0;
-    for (; src[i] && i + 1 < maxLength; i++) {
-        dest[i] = src[i];
-    }
-    if (maxLength) {
-        dest[i] = 0;
-    }
-}
+// =============================================================================================
+// Plugin interface
+// =============================================================================================
 
 static void getName(char * name, size_t maxLength) {
     copyString(name, __unit_header.name, maxLength);
@@ -409,15 +802,15 @@ static void * createInstance(void) {
 
 static uint8_t getNumInputs(void) { return 0; }
 static uint8_t getNumOutputs(void) { return 2; }
-static uint8_t getNumParameters(void) { return NUM_SOUNDS + 1; }
+static uint8_t getNumParameters(void) { return soundCount + 1; }    // the sounds, then volume
 
 // Parameter ids must be non-zero (the firmware treats 0 as "no such parameter").
 static uint16_t getParameterId(size_t index) {
-    return index <= PARAM_VOLUME ? index + 1 : 0;
+    return index <= (size_t)soundCount ? index + 1 : 0;
 }
 
 static void getParameterName(size_t index, char * name, size_t maxLength) {
-    copyString(name, index < NUM_SOUNDS ? sounds[index].name : index == PARAM_VOLUME ? "volume" : "", maxLength);
+    copyString(name, index < (size_t)soundCount ? sounds[index].name : index == (size_t)soundCount ? "volume" : "", maxLength);
 }
 
 static const UnitPlugin plugin = {
@@ -433,7 +826,15 @@ static const UnitPlugin plugin = {
 
 const UnitPlugin * unit_entry(const UnitHostApi * hostApi) {
     api = hostApi;
-    renderKit();
-    api->log("Drums unit ready: %d sounds, %d KB of samples", NUM_SOUNDS, (int)(sizeof(kit) / 1024));
+    if (!UNIT_HOST_HAS(api, readDirectory)) {
+        api->log("Drums: this firmware has no file access for units; update the firmware");
+        return &plugin;
+    }
+    loadSampleFolder();
+    if (soundCount == 0) {
+        api->log("Drums: no usable WAV files in %s, using the built-in kit", SAMPLE_FOLDER);
+        loadBuiltinKit();
+    }
+    api->log("Drums ready with %d sounds", soundCount);
     return &plugin;
 }

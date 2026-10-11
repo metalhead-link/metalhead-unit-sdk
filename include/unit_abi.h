@@ -108,6 +108,12 @@ typedef struct UnitPlugin {
 
 // --- Services the firmware offers to units ----------------------------------------------
 
+typedef struct UnitDirectoryEntry {
+    char name[64];
+    uint32_t size;
+    uint8_t isDirectory;
+} UnitDirectoryEntry;
+
 typedef struct UnitHostApi {
     uint32_t abiVersion;        // UNIT_ABI_VERSION of the firmware
     uint32_t size;              // sizeof(UnitHostApi) in the firmware; fields beyond it are absent
@@ -116,7 +122,26 @@ typedef struct UnitHostApi {
     // process(): messages are queued and printed from the main loop; longer than 255
     // characters is truncated, and messages are dropped when the queue (64) is full.
     void (*log)(const char * format, ...);
+
+    // --- Added to ABI 1 later: check UNIT_HOST_HAS(api, field) before using these ---------
+
+    // Memory for the rest of the unit's life (never freed), 8-byte aligned and not zeroed.
+    // Returns NULL when the unit heap (64 MB, shared by all units) is exhausted.
+    void * (*allocate)(size_t size);
+
+    // Files on the SD card, by absolute path ("/samples/drums/kick.wav"). Only call these
+    // from unit_entry() or createInstance(), never from process(); they block on the SD card
+    // and refuse to run in interrupt context. Negative return values are errors.
+    int32_t (*fileSize)(const char * path);
+    int32_t (*readFile)(const char * path, uint32_t offset, void * buffer, uint32_t length);  // bytes read
+    // Directory entry number `index` (0, 1, 2, ...): returns 1 and fills `entry`, 0 after the
+    // last entry. Order is the order on disk; names longer than 63 characters are skipped.
+    int32_t (*readDirectory)(const char * path, uint32_t index, UnitDirectoryEntry * entry);
 } UnitHostApi;
+
+// True if the firmware's UnitHostApi includes `field`.
+#define UNIT_HOST_HAS(api, field) \
+    ((api)->size >= offsetof(UnitHostApi, field) + sizeof(((UnitHostApi *)0)->field))
 
 // --- Entry point ------------------------------------------------------------------------
 

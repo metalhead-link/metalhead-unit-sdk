@@ -21,7 +21,7 @@ cd ccs/units/vumeter && make        # → build/vumeter.unt
 | `common/unitrt.c` | `memcpy`/`memset`/`memmove`/`memcmp` linked into every unit |
 | `tools/mkunit.py` | ELF → `.unt` converter |
 | `vumeter/` | example: level meters on a Launchpad Mini MK3 |
-| `drums/` | example: drum sampler with a built-in kit (rendered at load), triggered via `[midimap]` |
+| `drums/` | example: drum sampler playing WAV files from `/samples/drums` (built-in kit as fallback) |
 | `../wormhole/src/unitloader.c` | the firmware side |
 
 ## ABI (version 1)
@@ -40,8 +40,12 @@ const UnitPlugin * unit_entry(const UnitHostApi * api);
 There is no dynamic linking. A unit can't call firmware functions or the C library by name. It
 gets exactly two things from the host:
 
-- `UnitHostApi`, passed to `unit_entry`: currently just `log()`. It's a versioned table; new
-  services are appended and units check `api->size` before using a newer field.
+- `UnitHostApi`, passed to `unit_entry`: `log()`, `allocate()` (memory for the rest of the
+  unit's life, from a shared 64 MB heap) and read-only SD card access (`fileSize`, `readFile`,
+  `readDirectory`). It's a versioned table: new services are appended, and units check
+  `UNIT_HOST_HAS(api, field)` before using one, so a unit still loads on older firmware. File
+  access is only allowed from `unit_entry()` and `createInstance()`; the firmware refuses it
+  while units' `process()` functions run.
 - `UnitProcessHost`, passed to every `process()` call: transport (`play`/`stop`/`requestTempo`),
   `sendMIDIEvent`, and the `UnitTimeInfo` for the block.
 
@@ -139,6 +143,8 @@ loaded yet. Its reply is `@unitput ok <name> loaded|unchanged|reboot` or
 
 ## Limits (for now)
 
-- 2 MB pool for all units, 256 KB per file, 16 units, 32 plugins in total.
+- 2 MB pool for all units' code and static data, 256 KB per file, 16 units, 32 plugins in total;
+  64 MB heap for `allocate()`.
 - Units are never unloaded, so replacing one, or freeing its instances, takes a reboot.
-- No access to SD card files, the network or USB from a unit; only what the two tables provide.
+- Files are read-only, and only while loading. No network or USB access from a unit; only what
+  the two tables provide.
