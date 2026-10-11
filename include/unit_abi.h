@@ -64,8 +64,8 @@ typedef struct UnitTimeInfo {
     uint64_t microSeconds;      // device clock at the start of this block
     float sampleRate;
     int isPlaying;              // transport running (Ableton Link / MIDI clock timeline)
-    float barStartPos;          // in quarter notes
-    float ppqPos;               // position in quarter notes
+    double barStartPos;         // in quarter notes
+    double ppqPos;              // position in quarter notes
     float tempo;                // BPM
     int timeSigNumerator;       // quantum
 } UnitTimeInfo;
