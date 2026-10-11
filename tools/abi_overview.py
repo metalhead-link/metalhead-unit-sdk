@@ -403,8 +403,8 @@ def build(out):
     # --- Cover ---------------------------------------------------------------------------
     story += [
         Spacer(1, 4 * mm),
-        P('Wormhole unit ABI', 'title'),
-        P(f'Version {abi} &nbsp;·&nbsp; loadable units for the "metalhead" firmware &nbsp;·&nbsp; {today}', 'subtitle'),
+        P('Metalhead unit ABI', 'title'),
+        P(f'Version {abi} &nbsp;·&nbsp; loadable units for the metalhead firmware &nbsp;·&nbsp; {today}', 'subtitle'),
         P('A <b>unit</b> is an audio/MIDI plugin built on the laptop, separately from the firmware, and loaded by the '
           'running device. It is uploaded from the web UI (or copied to the SD card), stored as '
           f'{code("/units/&lt;Name&gt;.unt")} next to {code("config.txt")}, loaded at every boot and then used in '
@@ -551,14 +551,14 @@ def build(out):
         canvas.line(20 * mm, 14 * mm, A4[0] - 20 * mm, 14 * mm)
         canvas.setFont('Helvetica', 7.5)
         canvas.setFillColor(MUTED)
-        canvas.drawString(20 * mm, 9.5 * mm, f'Wormhole unit ABI {abi}  ·  ccs/units/include/unit_abi.h')
+        canvas.drawString(20 * mm, 9.5 * mm, f'Metalhead unit ABI {abi}  ·  ccs/units/include/unit_abi.h')
         canvas.drawRightString(A4[0] - 20 * mm, 9.5 * mm, f'{doc.page}')
         canvas.setFillColor(ACCENT)
         canvas.rect(0, A4[1] - 4, A4[0], 4, stroke=0, fill=1)
         canvas.restoreState()
 
     doc = BaseDocTemplate(out, pagesize=A4, leftMargin=20 * mm, rightMargin=20 * mm, topMargin=16 * mm, bottomMargin=20 * mm,
-                          title=f'Wormhole unit ABI {abi}', author='wormhole', subject='Binary interface for loadable units')
+                          title=f'Metalhead unit ABI {abi}', author='metalhead', subject='Binary interface for loadable units')
     frame = Frame(doc.leftMargin, doc.bottomMargin, doc.width, doc.height, id='body')
     doc.addPageTemplates([PageTemplate(id='page', frames=[frame], onPage=on_page)])
     doc.build(story)

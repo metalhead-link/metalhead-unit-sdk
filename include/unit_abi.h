@@ -1,5 +1,5 @@
 /*
- * unit_abi.h — binary interface between the wormhole firmware and loadable units.
+ * unit_abi.h — binary interface between the metalhead firmware and loadable units.
  *
  * A unit is an audio/MIDI plugin built separately from the firmware (see ccs/units/README.md)
  * and loaded at runtime from /units/<name>.unt on the SD card. This header is the whole
