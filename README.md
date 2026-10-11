@@ -21,6 +21,7 @@ cd ccs/units/vumeter && make        # → build/vumeter.unt
 | `common/unitrt.c` | `memcpy`/`memset`/`memmove`/`memcmp` linked into every unit |
 | `tools/mkunit.py` | ELF → `.unt` converter |
 | `vumeter/` | example: level meters on a Launchpad Mini MK3 |
+| `drums/` | example: drum sampler with a built-in kit (rendered at load), triggered via `[midimap]` |
 | `../wormhole/src/unitloader.c` | the firmware side |
 
 ## ABI (version 1)
