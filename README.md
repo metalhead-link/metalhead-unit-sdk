@@ -23,6 +23,7 @@ cd ccs/units/vumeter && make        # → build/vumeter.unt
 | `doc/unit-abi-overview.pdf` | printable ABI overview; regenerate with `tools/abi_overview.py` (needs reportlab) |
 | `vumeter/` | example: level meters on a Launchpad Mini MK3 |
 | `drums/` | example: drum sampler playing WAV files from `/samples/drums` (built-in kit as fallback) |
+| `yafr/` | example: plate-style reverb, mono in / stereo out (port of the old built-in YAFR plugin) |
 | `../wormhole/src/unitloader.c` | the firmware side |
 
 ## ABI (version 1)
