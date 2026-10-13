@@ -57,8 +57,8 @@ references an outside symbol (`sinf`, `printf`, …) fails at build time, not on
 ### The plugin interface
 
 `UnitPlugin` is the firmware's `struct AudioPlugin`, spelled out in a standalone header:
-`getName`, `createInstance`, `getNumInputs/Outputs/Parameters`, `getParameterId/Name` and
-`process`. `unitloader.c` has `_Static_assert`s on the size and every field offset of each ABI
+`getName`, `createInstance`, `getNumInputs/Outputs/Parameters`, `getParameterId/Name`,
+`process` and `releaseInstance`. `unitloader.c` has `_Static_assert`s on the size and every field offset of each ABI
 structure against the firmware's own definitions. If someone changes `plugins.h` in an
 incompatible way, the firmware stops compiling instead of crashing units. Since the layouts are
 identical, loaded units go straight into the plugin table, with no wrapper in the audio
@@ -69,8 +69,13 @@ interrupt.
   handler saves the full VFP/NEON state.
 - Unconnected inputs contain silence; outputs start zeroed.
 - At most **16 MIDI events per block** are delivered, for all units together.
-- Instances come from `createInstance()`; units keep them in their own static memory (their bss).
-  Instances are never destroyed, so plan for a fixed maximum, the same as the built-in plugins.
+- Instances come from `createInstance()`; units keep them in their own static memory (their bss),
+  so plan for a fixed maximum, the same as the built-in plugins.
+- `releaseInstance()` gives an instance back when a config reload (`cfgapply`) drops its unit;
+  `createInstance()` may hand that slot out again. A unit that keeps its name and type across a
+  reload keeps its instance and isn't released. `releaseInstance` may be NULL, but then every
+  reload that drops the unit loses an instance. Memory from `allocate()` is never freed, so keep
+  it with the slot and reuse it (see `yafr/`) rather than allocating again.
 - Everything `unit_entry` returns has to stay valid forever: units are never unloaded.
 
 ### Code generation

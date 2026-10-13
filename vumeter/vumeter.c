@@ -85,6 +85,10 @@ static void * createInstance(void) {
     return 0;
 }
 
+static void releaseInstance(void * instance) {
+    ((struct Instance *)instance)->active = 0;
+}
+
 static uint8_t getNumInputs(void) { return NUM_COLUMNS; }
 static uint8_t getNumOutputs(void) { return 0; }
 static uint8_t getNumParameters(void) { return 0; }
@@ -186,6 +190,7 @@ static const UnitPlugin plugin = {
     .getParameterId = getParameterId,
     .getParameterName = getParameterName,
     .process = process,
+    .releaseInstance = releaseInstance,
 };
 
 const UnitPlugin * unit_entry(const UnitHostApi * hostApi) {

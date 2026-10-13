@@ -262,14 +262,27 @@ static float * allocateZeroed(int samples) {
     return buffer;
 }
 
-static int initDelay(struct DelayLine * d, int size) {
-    d->buffer = allocateZeroed(size);
+// Reuses `buffer` (a released instance's memory, the same size) instead of allocating again.
+static float * zeroedBuffer(float * buffer, int samples) {
+    if (!buffer) {
+        return allocateZeroed(samples);
+    }
+    for (int i = 0; i < samples; i++) {
+        buffer[i] = 0.0F;
+    }
+    return buffer;
+}
+
+static int initDelay(struct DelayLine * d, float * oldBuffer, int size) {
+    d->buffer = zeroedBuffer(oldBuffer, size);
     d->size = size;
     d->index = 0;
     return d->buffer != 0;
 }
 
+// Buffers survive a release: the unit heap never frees, so a reused slot keeps its memory.
 static int initInstance(struct Instance * inst) {
+    struct Instance old = *inst;
     *inst = (struct Instance) {
         .roomSize = 0.5F,
         .dampening = 0.5F,
@@ -279,8 +292,8 @@ static int initInstance(struct Instance * inst) {
         .preDelay = 0.0F,
     };
     inst->damp = 0.4F * inst->dampening;
-    inst->early = allocateZeroed(EARLY_SIZE);
-    inst->predelay = allocateZeroed(PREDELAY_SIZE);
+    inst->early = zeroedBuffer(old.early, EARLY_SIZE);
+    inst->predelay = zeroedBuffer(old.predelay, PREDELAY_SIZE);
     if (!inst->early || !inst->predelay) {
         return 0;
     }
@@ -288,12 +301,12 @@ static int initInstance(struct Instance * inst) {
         struct Tank * t = &inst->tank[ch];
         int spread = ch * STEREO_SPREAD;
         for (int i = 0; i < NUM_ALLPASS; i++) {
-            if (!initDelay(&t->allpass[i], allpassDelays[i] + spread)) {
+            if (!initDelay(&t->allpass[i], old.tank[ch].allpass[i].buffer, allpassDelays[i] + spread)) {
                 return 0;
             }
         }
         for (int i = 0; i < NUM_COMB; i++) {
-            if (!initDelay(&t->comb[i].delay, combDelays[i] + spread)) {
+            if (!initDelay(&t->comb[i].delay, old.tank[ch].comb[i].delay.buffer, combDelays[i] + spread)) {
                 return 0;
             }
         }
@@ -342,6 +355,10 @@ static void * createInstance(void) {
     return 0;
 }
 
+static void releaseInstance(void * instance) {
+    ((struct Instance *)instance)->active = 0;
+}
+
 static uint8_t getNumInputs(void) { return 1; }
 static uint8_t getNumOutputs(void) { return 2; }
 static uint8_t getNumParameters(void) { return NUM_PARAMETERS; }
@@ -364,6 +381,7 @@ static const UnitPlugin plugin = {
     .getParameterId = getParameterId,
     .getParameterName = getParameterName,
     .process = process,
+    .releaseInstance = releaseInstance,
 };
 
 const UnitPlugin * unit_entry(const UnitHostApi * hostApi) {

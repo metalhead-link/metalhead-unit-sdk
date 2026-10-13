@@ -104,6 +104,10 @@ typedef struct UnitPlugin {
                     size_t nrOutChannels, float ** outSamples,
                     size_t frameCount,
                     UnitParameterChange * parameterChanges, size_t parameterChangeCount);
+
+    // Gives an instance back when a config reload drops its unit; createInstance() may hand
+    // it out again later. NULL if instances are never given back (they leak on reloads).
+    void (*releaseInstance)(void * instance);
 } UnitPlugin;
 
 // --- Services the firmware offers to units ----------------------------------------------

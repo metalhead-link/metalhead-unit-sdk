@@ -38,7 +38,7 @@ STRUCTS = {
     'UnitTimeInfo': ['microSeconds', 'sampleRate', 'isPlaying', 'barStartPos', 'ppqPos', 'tempo', 'timeSigNumerator'],
     'UnitProcessHost': ['play', 'stop', 'requestTempo', 'sendMIDIEvent', 'timeInfo', 'hostData'],
     'UnitPlugin': ['vendorId', 'getName', 'createInstance', 'getNumInputs', 'getNumOutputs', 'getNumParameters',
-                   'getParameterId', 'getParameterName', 'process'],
+                   'getParameterId', 'getParameterName', 'process', 'releaseInstance'],
     'UnitHostApi': ['abiVersion', 'size', 'log', 'allocate', 'fileSize', 'readFile', 'readDirectory'],
     'UnitDirectoryEntry': ['name', 'size', 'isDirectory'],
     'UnitImageHeader': ['magic', 'abiVersion', 'name'],

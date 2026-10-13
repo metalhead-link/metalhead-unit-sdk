@@ -800,6 +800,10 @@ static void * createInstance(void) {
     return 0;
 }
 
+static void releaseInstance(void * instance) {
+    ((struct Instance *)instance)->active = 0;
+}
+
 static uint8_t getNumInputs(void) { return 0; }
 static uint8_t getNumOutputs(void) { return 2; }
 static uint8_t getNumParameters(void) { return soundCount + 1; }    // the sounds, then volume
@@ -822,6 +826,7 @@ static const UnitPlugin plugin = {
     .getParameterId = getParameterId,
     .getParameterName = getParameterName,
     .process = process,
+    .releaseInstance = releaseInstance,
 };
 
 const UnitPlugin * unit_entry(const UnitHostApi * hostApi) {
