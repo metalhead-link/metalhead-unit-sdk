@@ -1,7 +1,7 @@
 /*
  * Linker script for loadable units: one position-independent image linked at address 0,
  * starting with the UnitImageHeader. The loader copies the file-backed part, zeroes the rest
- * (bss) and applies the R_ARM_RELATIVE relocations that mkunit.py extracts from .rel.dyn.
+ * (bss) and applies the relative relocations that mkunit.py extracts from .rel(a).dyn.
  */
 ENTRY(unit_entry)
 
@@ -31,6 +31,7 @@ SECTIONS
     .hash : { *(.hash) }
     .gnu.hash : { *(.gnu.hash) }
     .rel.dyn : { *(.rel.dyn) *(.rel.*) }
+    .rela.dyn : { *(.rela.dyn) *(.rela.*) }
 
     . = ALIGN(8);
     .bss : {

@@ -4,8 +4,12 @@
 The .unt layout is described in ccs/units/include/unit_abi.h:
     UnitFileHeader (64 bytes) | image | relocation offsets (uint32 each)
 
-Only R_ARM_RELATIVE relocations are allowed: anything else means the unit references a
-symbol that isn't in the image (e.g. a C library function), which the loader can't resolve.
+32-bit ARM (BeagleBone Black) and 64-bit ARM (Raspberry Pi 5) units; the file's machine
+field says which. Only relative relocations are allowed (R_ARM_RELATIVE, R_AARCH64_RELATIVE):
+anything else means the unit references a symbol that isn't in the image (e.g. a C library
+function), which the loader can't resolve. The loader adds the load address to the word at
+each listed offset, so for AArch64 (RELA, the value is in the relocation) the value is written
+into the image first.
 """
 import struct
 import sys
@@ -14,6 +18,8 @@ import zlib
 UNIT_FILE_MAGIC = 0x31544E55     # "UNT1"
 UNIT_IMAGE_MAGIC = 0x54494E55    # "UNIT"
 UNIT_NAME_LENGTH = 32
+UNIT_MACHINE_ARM32 = 0
+UNIT_MACHINE_AARCH64 = 1
 HEADER_FORMAT = '<IHHIIIIII32s'
 HEADER_SIZE = struct.calcsize(HEADER_FORMAT)
 assert HEADER_SIZE == 64
@@ -22,111 +28,137 @@ PT_LOAD = 1
 SHT_SYMTAB = 2
 SHT_RELA = 4
 SHT_REL = 9
+EM_ARM = 40
+EM_AARCH64 = 183
 R_ARM_NONE = 0
 R_ARM_RELATIVE = 23
-EM_ARM = 40
+R_AARCH64_NONE = 0
+R_AARCH64_RELATIVE = 1027
 
 
 def fail(msg):
     sys.exit(f'mkunit: error: {msg}')
 
 
-def read_elf(data):
-    if data[:4] != b'\x7fELF' or data[4] != 1 or data[5] != 1:
-        fail('not a 32-bit little-endian ELF file')
-    (e_type, e_machine, _, _, e_phoff, e_shoff, _, _, e_phentsize, e_phnum,
-     e_shentsize, e_shnum, e_shstrndx) = struct.unpack_from('<HHIIIIIHHHHHH', data, 16)
-    if e_machine != EM_ARM:
-        fail('not an ARM ELF file')
-    if e_type != 3:  # ET_DYN
-        fail('not position independent (link with -pie and unit.ld)')
+class Elf:
+    def __init__(self, data):
+        if data[:4] != b'\x7fELF' or data[5] != 1:
+            fail('not a little-endian ELF file')
+        self.data = data
+        self.is64 = data[4] == 2
+        if self.is64:
+            (e_type, e_machine, _, _, e_phoff, e_shoff, _, _, e_phentsize, e_phnum,
+             e_shentsize, e_shnum, e_shstrndx) = struct.unpack_from('<HHIQQQIHHHHHH', data, 16)
+        else:
+            (e_type, e_machine, _, _, e_phoff, e_shoff, _, _, e_phentsize, e_phnum,
+             e_shentsize, e_shnum, e_shstrndx) = struct.unpack_from('<HHIIIIIHHHHHH', data, 16)
+        if (e_machine, self.is64) == (EM_ARM, False):
+            self.machine, self.word = UNIT_MACHINE_ARM32, 4
+        elif (e_machine, self.is64) == (EM_AARCH64, True):
+            self.machine, self.word = UNIT_MACHINE_AARCH64, 8
+        else:
+            fail('not a 32-bit ARM or 64-bit ARM ELF file')
+        if e_type != 3:  # ET_DYN
+            fail('not position independent (link with -pie and unit.ld)')
 
-    segments = []
-    for i in range(e_phnum):
-        p_type, p_offset, p_vaddr, _, p_filesz, p_memsz, _, _ = struct.unpack_from(
-            '<IIIIIIII', data, e_phoff + i * e_phentsize)
-        if p_type == PT_LOAD:
-            segments.append((p_offset, p_vaddr, p_filesz, p_memsz))
+        self.segments = []
+        for i in range(e_phnum):
+            off = e_phoff + i * e_phentsize
+            if self.is64:
+                p_type, _, p_offset, p_vaddr, _, p_filesz, p_memsz, _ = struct.unpack_from('<IIQQQQQQ', data, off)
+            else:
+                p_type, p_offset, p_vaddr, _, p_filesz, p_memsz, _, _ = struct.unpack_from('<IIIIIIII', data, off)
+            if p_type == PT_LOAD:
+                self.segments.append((p_offset, p_vaddr, p_filesz, p_memsz))
 
-    sections = []
-    for i in range(e_shnum):
-        sh = struct.unpack_from('<IIIIIIIIII', data, e_shoff + i * e_shentsize)
-        sections.append(dict(name=sh[0], type=sh[1], addr=sh[3], offset=sh[4], size=sh[5],
-                             link=sh[6], entsize=sh[9]))
-    strtab = sections[e_shstrndx]
+        self.sections = []
+        for i in range(e_shnum):
+            off = e_shoff + i * e_shentsize
+            if self.is64:
+                name, stype, _, addr, offset, size, link, _, _, entsize = struct.unpack_from('<IIQQQQIIQQ', data, off)
+            else:
+                name, stype, _, addr, offset, size, link, _, _, entsize = struct.unpack_from('<IIIIIIIIII', data, off)
+            self.sections.append(dict(name=name, type=stype, addr=addr, offset=offset, size=size,
+                                      link=link, entsize=entsize))
+        strtab = self.sections[e_shstrndx]
+        for s in self.sections:
+            s['name'] = self.string(strtab, s['name'])
 
-    def section_name(s):
-        start = strtab['offset'] + s['name']
-        return data[start:data.index(b'\0', start)].decode()
+    def string(self, table, index):
+        start = table['offset'] + index
+        return self.data[start:self.data.index(b'\0', start)].decode()
 
-    for s in sections:
-        s['name'] = section_name(s)
-    return segments, sections
+    def section(self, name):
+        return next((s for s in self.sections if s['name'] == name), None)
 
+    def symbols(self, section):
+        """(name, value) of each entry in a symbol table section"""
+        strs = self.sections[section['link']]
+        size = 24 if self.is64 else 16
+        for off in range(section['offset'], section['offset'] + section['size'], size):
+            if self.is64:
+                st_name, _, _, _, st_value, _ = struct.unpack_from('<IBBHQQ', self.data, off)
+            else:
+                st_name, st_value, _, _, _, _ = struct.unpack_from('<IIIBBH', self.data, off)
+            yield self.string(strs, st_name), st_value
 
-def symbols(data, sections):
-    for s in sections:
-        if s['type'] != SHT_SYMTAB:
-            continue
-        strs = sections[s['link']]
-        for off in range(s['offset'], s['offset'] + s['size'], 16):
-            st_name, st_value, st_size, st_info, _, st_shndx = struct.unpack_from('<IIIBBH', data, off)
-            start = strs['offset'] + st_name
-            yield data[start:data.index(b'\0', start)].decode(), st_value
+    def relocations(self):
+        """(offset, type, symbol index, addend or None) of every dynamic relocation"""
+        for s in self.sections:
+            if s['type'] == SHT_REL and not self.is64:
+                for off in range(s['offset'], s['offset'] + s['size'], 8):
+                    r_offset, r_info = struct.unpack_from('<II', self.data, off)
+                    yield r_offset, r_info & 0xff, r_info >> 8, None
+            elif s['type'] == SHT_RELA and self.is64:
+                for off in range(s['offset'], s['offset'] + s['size'], 24):
+                    r_offset, r_info, r_addend = struct.unpack_from('<QQq', self.data, off)
+                    yield r_offset, r_info & 0xffffffff, r_info >> 32, r_addend
+            elif s['type'] in (SHT_REL, SHT_RELA) and s['size']:
+                fail(f'unexpected relocation section {s["name"]}')
 
 
 def main():
     if len(sys.argv) != 3:
         sys.exit('usage: mkunit.py unit.elf unit.unt')
-    data = open(sys.argv[1], 'rb').read()
-    segments, sections = read_elf(data)
-    if not segments:
+    elf = Elf(open(sys.argv[1], 'rb').read())
+    data = elf.data
+    if not elf.segments:
         fail('no loadable segments')
 
     # Flatten all loadable segments into one image starting at address 0.
-    file_end = max(vaddr + filesz for _, vaddr, filesz, _ in segments)
-    mem_end = max(vaddr + memsz for _, vaddr, _, memsz in segments)
-    if min(vaddr for _, vaddr, _, _ in segments) != 0:
+    file_end = max(vaddr + filesz for _, vaddr, filesz, _ in elf.segments)
+    mem_end = max(vaddr + memsz for _, vaddr, _, memsz in elf.segments)
+    if min(vaddr for _, vaddr, _, _ in elf.segments) != 0:
         fail('image must be linked at address 0 (use unit.ld)')
     image = bytearray(file_end)
-    for offset, vaddr, filesz, _ in segments:
+    for offset, vaddr, filesz, _ in elf.segments:
         image[vaddr:vaddr + filesz] = data[offset:offset + filesz]
-    image_size = (file_end + 3) & ~3
+    image_size = (file_end + elf.word - 1) & ~(elf.word - 1)
     image.extend(b'\0' * (image_size - file_end))
     bss_size = max(0, mem_end - image_size)
 
     # Relocations
+    none, relative = ((R_ARM_NONE, R_ARM_RELATIVE) if elf.machine == UNIT_MACHINE_ARM32
+                      else (R_AARCH64_NONE, R_AARCH64_RELATIVE))
     relocs = []
-    sym_names = None
-    for s in sections:
-        if s['type'] == SHT_RELA:
-            fail(f'unexpected RELA section {s["name"]}')
-        if s['type'] != SHT_REL:
+    for r_offset, r_type, r_sym, r_addend in elf.relocations():
+        if r_type == none:
             continue
-        for off in range(s['offset'], s['offset'] + s['size'], 8):
-            r_offset, r_info = struct.unpack_from('<II', data, off)
-            r_type, r_sym = r_info & 0xff, r_info >> 8
-            if r_type == R_ARM_NONE:
-                continue
-            if r_type != R_ARM_RELATIVE:
-                if sym_names is None:
-                    dynsym = next((x for x in sections if x['name'] == '.dynsym'), None)
-                    dynstr = next((x for x in sections if x['name'] == '.dynstr'), None)
-                    sym_names = {}
-                    if dynsym and dynstr:
-                        for i, o in enumerate(range(dynsym['offset'], dynsym['offset'] + dynsym['size'], 16)):
-                            st_name = struct.unpack_from('<I', data, o)[0]
-                            st = dynstr['offset'] + st_name
-                            sym_names[i] = data[st:data.index(b'\0', st)].decode()
-                fail(f'unsupported relocation type {r_type} at 0x{r_offset:x} '
-                     f'(symbol "{sym_names.get(r_sym, "?")}"): units may only use code and data '
-                     f'from their own image and the UnitHostApi')
-            if r_offset % 4 or r_offset + 4 > image_size:
-                fail(f'relocation at 0x{r_offset:x} outside the image')
-            relocs.append(r_offset)
+        if r_type != relative:
+            dynsym = elf.section('.dynsym')
+            names = [n for n, _ in elf.symbols(dynsym)] if dynsym else []
+            fail(f'unsupported relocation type {r_type} at 0x{r_offset:x} '
+                 f'(symbol "{names[r_sym] if r_sym < len(names) else "?"}"): units may only use '
+                 f'code and data from their own image and the UnitHostApi')
+        if r_offset % elf.word or r_offset + elf.word > image_size:
+            fail(f'relocation at 0x{r_offset:x} outside the image')
+        if r_addend is not None:
+            struct.pack_into('<Q', image, r_offset, r_addend)
+        relocs.append(r_offset)
     relocs.sort()
 
-    entry = dict(symbols(data, sections)).get('unit_entry')
+    symtab = next((s for s in elf.sections if s['type'] == SHT_SYMTAB), None)
+    entry = dict(elf.symbols(symtab)).get('unit_entry') if symtab else None
     if entry is None:
         fail('unit_entry not defined')
 
@@ -139,10 +171,11 @@ def main():
 
     body = bytes(image) + struct.pack(f'<{len(relocs)}I', *relocs)
     header = struct.pack(HEADER_FORMAT, UNIT_FILE_MAGIC, abi, HEADER_SIZE, image_size, bss_size,
-                         len(relocs), entry, zlib.crc32(body), 0, name)
+                         len(relocs), entry, zlib.crc32(body), elf.machine, name)
     with open(sys.argv[2], 'wb') as f:
         f.write(header + body)
-    print(f'{sys.argv[2]}: {type_name.decode()} ABI {abi}, image {image_size} bytes, '
+    machine = 'arm32' if elf.machine == UNIT_MACHINE_ARM32 else 'aarch64'
+    print(f'{sys.argv[2]}: {type_name.decode()} ABI {abi} {machine}, image {image_size} bytes, '
           f'bss {bss_size} bytes, {len(relocs)} relocations, entry 0x{entry:x}')
 
 

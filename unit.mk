@@ -5,20 +5,30 @@
 #   SRCS := vumeter.c
 #   include ../unit.mk
 #
-# Output: build/$(NAME).unt (upload it with the web UI, or copy it to /units/ on the SD card)
-
-CROSSPATH ?= /Applications/ARM/bin
-PREFIX := $(CROSSPATH)/arm-none-eabi-
-CC := $(PREFIX)gcc
-OBJDUMP := $(PREFIX)objdump
+# Output, one per board (upload the one for yours with the web UI, or copy it to /units/
+# on the SD card):
+#   build/arm32/$(NAME).unt      BeagleBone Black
+#   build/aarch64/$(NAME).unt    Raspberry Pi 5
+# `make arm32` or `make aarch64` builds just one.
 
 UNITS_DIR := $(patsubst %/,%,$(dir $(lastword $(MAKEFILE_LIST))))
 
-# Same libgcc variant as the firmware (ARM, not Thumb; see LD_OPTS in wormhole/Makefile).
-LIBGCC ?= /Applications/ARM/lib/gcc/arm-none-eabi/14.3.1/arm/v5te/hard/libgcc.a
+# BeagleBone Black: the same toolchain and libgcc variant as the firmware (ARM, not Thumb;
+# see LD_OPTS in wormhole/Makefile)
+CROSSPATH ?= /Applications/ARM/bin
+CC_arm32 := $(CROSSPATH)/arm-none-eabi-gcc
+OBJDUMP_arm32 := $(CROSSPATH)/arm-none-eabi-objdump
+LIBGCC_arm32 ?= /Applications/ARM/lib/gcc/arm-none-eabi/14.3.1/arm/v5te/hard/libgcc.a
+CFLAGS_arm32 := -mcpu=cortex-a8 -mfpu=neon -mfloat-abi=hard -marm
 
-CFLAGS := -mcpu=cortex-a8 -mfpu=neon -mfloat-abi=hard -marm \
-		-O2 -g -Wall -std=gnu11 \
+# Raspberry Pi 5: the same toolchain as rpi5/metalhead
+CROSSPATH_AARCH64 ?= /Applications/ArmGNUToolchain/15.3.rel2/aarch64-none-elf/bin
+CC_aarch64 := $(CROSSPATH_AARCH64)/aarch64-none-elf-gcc
+OBJDUMP_aarch64 := $(CROSSPATH_AARCH64)/aarch64-none-elf-objdump
+LIBGCC_aarch64 ?= $(shell $(CC_aarch64) -print-libgcc-file-name)
+CFLAGS_aarch64 := -mcpu=cortex-a76
+
+CFLAGS := -O2 -g -Wall -std=gnu11 \
 		-fpie -ffreestanding -fno-common -fno-builtin-printf \
 		-fno-exceptions -fno-unwind-tables -fno-asynchronous-unwind-tables \
 		-ffunction-sections -fdata-sections \
@@ -28,29 +38,34 @@ LDFLAGS := -nostdlib -nostartfiles -pie \
 		-Wl,--no-dynamic-linker -Wl,-T,$(UNITS_DIR)/unit.ld -Wl,--gc-sections \
 		-Wl,-z,max-page-size=16 -Wl,--build-id=none -Wl,--no-warn-rwx-segments
 
-OBJS := $(patsubst %.c,build/%.o,$(SRCS)) build/unitrt.o
+MACHINES := arm32 aarch64
 
-all: build/$(NAME).unt
+all: $(MACHINES)
 
-build/%.o: %.c $(UNITS_DIR)/include/unit_abi.h
-	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c -o $@ $<
+define MACHINE_RULES
+$(1): build/$(1)/$(NAME).unt
+
+build/$(1)/%.o: %.c $(UNITS_DIR)/include/unit_abi.h
+	@mkdir -p $$(dir $$@)
+	$(CC_$(1)) $(CFLAGS_$(1)) $(CFLAGS) -c -o $$@ $$<
 
 # No loop-to-memcpy/memset pattern matching here: it would turn these into calls to themselves.
-build/unitrt.o: $(UNITS_DIR)/common/unitrt.c
-	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -fno-tree-loop-distribute-patterns -c -o $@ $<
+build/$(1)/unitrt.o: $(UNITS_DIR)/common/unitrt.c
+	@mkdir -p $$(dir $$@)
+	$(CC_$(1)) $(CFLAGS_$(1)) $(CFLAGS) -fno-tree-loop-distribute-patterns -c -o $$@ $$<
 
-build/$(NAME).elf: $(OBJS) $(UNITS_DIR)/unit.ld
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(OBJS) $(LIBGCC)
+build/$(1)/$(NAME).elf: $(patsubst %.c,build/$(1)/%.o,$(SRCS)) build/$(1)/unitrt.o $(UNITS_DIR)/unit.ld
+	$(CC_$(1)) $(CFLAGS_$(1)) $(CFLAGS) $(LDFLAGS) -o $$@ $$(filter %.o,$$^) $(LIBGCC_$(1))
 
-build/$(NAME).unt: build/$(NAME).elf $(UNITS_DIR)/tools/mkunit.py
-	python3 $(UNITS_DIR)/tools/mkunit.py $< $@
+build/$(1)/$(NAME).unt: build/$(1)/$(NAME).elf $(UNITS_DIR)/tools/mkunit.py
+	python3 $(UNITS_DIR)/tools/mkunit.py $$< $$@
 
-disasm: build/$(NAME).elf
-	$(OBJDUMP) -d -r $<
+disasm-$(1): build/$(1)/$(NAME).elf
+	$(OBJDUMP_$(1)) -d -r $$<
+endef
+$(foreach m,$(MACHINES),$(eval $(call MACHINE_RULES,$(m))))
 
 clean:
 	rm -rf build
 
-.PHONY: all clean disasm
+.PHONY: all clean $(MACHINES) $(foreach m,$(MACHINES),disasm-$(m))

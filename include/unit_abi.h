@@ -174,12 +174,23 @@ typedef struct UnitImageHeader {
 //   UnitFileHeader      64 bytes
 //   image               imageSize bytes, linked at address 0, starts with a UnitImageHeader
 //   relocations         relocCount little-endian uint32 offsets into the image; the loader
-//                       adds the load address to the 32-bit word at each offset
+//                       adds the load address to the pointer-sized word at each offset
+//                       (32 bits for UNIT_MACHINE_ARM32, 64 bits for UNIT_MACHINE_AARCH64)
 //
+// A unit is built for one machine; the loader refuses the other's (the ABI structures hold
+// pointers, so their layout differs). unit.mk builds both.
 // After loading, bssSize zero bytes follow the image. crc32 (IEEE 802.3, as zlib.crc32) covers
 // everything after the file header.
 
 #define UNIT_FILE_MAGIC         0x31544E55u     // "UNT1"
+
+#define UNIT_MACHINE_ARM32      0       // BeagleBone Black: Cortex-A8, ARM state, hard float
+#define UNIT_MACHINE_AARCH64    1       // Raspberry Pi 5: Cortex-A76, 64-bit
+#if defined(__aarch64__)
+#define UNIT_MACHINE            UNIT_MACHINE_AARCH64
+#else
+#define UNIT_MACHINE            UNIT_MACHINE_ARM32
+#endif
 
 typedef struct UnitFileHeader {
     uint32_t magic;
@@ -190,7 +201,7 @@ typedef struct UnitFileHeader {
     uint32_t relocCount;
     uint32_t entryOffset;       // offset of unit_entry in the image
     uint32_t crc32;
-    uint32_t reserved;
+    uint32_t machine;           // UNIT_MACHINE_*; 0 in files from before there was a choice
     char name[UNIT_NAME_LENGTH];
 } UnitFileHeader;
 

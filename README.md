@@ -11,8 +11,13 @@ vu VUMeter
 ```
 
 ```sh
-cd ccs/units/vumeter && make        # → build/vumeter.unt
+cd ccs/units/vumeter && make        # → build/arm32/vumeter.unt   (BeagleBone Black)
+                                    #   build/aarch64/vumeter.unt (Raspberry Pi 5)
 ```
+
+A unit binary is built for one board: upload the one for yours. The other board refuses it
+("built for 32-bit ARM (BeagleBone Black), this is 64-bit ARM (Raspberry Pi 5)") instead of
+running it. `make arm32` or `make aarch64` builds just one.
 
 | path | |
 |---|---|
@@ -31,9 +36,10 @@ cd ccs/units/vumeter && make        # → build/vumeter.unt
 ### What a unit is
 
 A unit is one **position-independent image** linked at address 0, plus a list of
-**relocations**. The firmware copies the image into a static pool in DDR, zeroes its bss, adds
-the load address to each 32-bit word the relocation list names, cleans the D-cache, invalidates
-the I-cache and branch predictor, and calls the entry point:
+**relocations**. The firmware copies the image into a static pool in DDR (at a 4 KiB boundary
+on the Pi: its code addresses data with `adrp`, by page), zeroes its bss, adds the load address
+to each pointer-sized word the relocation list names (32 bits on the BBB, 64 on the Pi), cleans
+the D-cache, invalidates the I-cache and branch predictor, and calls the entry point:
 
 ```c
 const UnitPlugin * unit_entry(const UnitHostApi * api);
@@ -51,7 +57,7 @@ gets exactly two things from the host:
 - `UnitProcessHost`, passed to every `process()` call: transport (`play`/`stop`/`requestTempo`),
   `sendMIDIEvent`, and the `UnitTimeInfo` for the block.
 
-`mkunit.py` refuses any relocation other than `R_ARM_RELATIVE`, so a unit that accidentally
+`mkunit.py` refuses any relocation other than `R_ARM_RELATIVE` / `R_AARCH64_RELATIVE`, so a unit that accidentally
 references an outside symbol (`sinf`, `printf`, …) fails at build time, not on the device.
 
 ### The plugin interface
