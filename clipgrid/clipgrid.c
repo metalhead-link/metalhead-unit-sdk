@@ -21,8 +21,14 @@
  * (Stop Solo Mute) is a delete modifier: hold it and press a clip to delete it.
  *
  * Every column has a volume parameter (volume1..volume8). Clips follow the transport (Ableton
- * Link / MIDI clock) and are silent while it is stopped. See clipgrid.txt for the config.txt
- * sections that map the Launchpad.
+ * Link / MIDI clock) and are silent while it is stopped. Route the Launchpad to the unit and
+ * the unit back to the Launchpad (see clipgrid.txt):
+ *
+ *   [units]
+ *   grid ClipGrid
+ *   [midiroutes]
+ *   .Launchpad_Mini_MK3 grid
+ *   grid .Launchpad_Mini_MK3
  *
  * Memory: every column continuously records its input into a 16-bit history ring made of
  * chunks from a shared pool. A capture doesn't copy audio: the clip takes a reference to the
@@ -80,15 +86,13 @@ static const uint16_t poolSizesMB[] = { 56, 48, 40, 32, 24, 16, 8 };
 // Bar counts of the capture buttons, bottom row left to right
 static const uint8_t captureBars[NUM_COLUMNS] = { 1, 2, 3, 4, 6, 8, 12, 16 };
 
-// Parameter ids
-#define PARAM_PAD               0       // + Launchpad note (row * 10 + column), rows 2..8
-#define PARAM_CAPTURE           100     // + bars
-#define PARAM_STOP              200     // + column (1..8)
-#define PARAM_SCENE             300     // + scene (1..7, top to bottom)
-#define PARAM_DELETE            400
-#define PARAM_VOLUME            500     // + column (1..8)
+// Launchpad programmer mode: pads send note on (row * 10 + column, row 1 at the bottom), the
+// round buttons send control changes (127 pressed, 0 released)
+#define CC_STOP_FIRST           91      // top row, 91..98 left to right
+#define CC_DELETE               19      // right column, bottom (Stop Solo Mute); x9 above it are scenes
 
-#define NUM_PARAMETERS          (NUM_COLUMNS * NUM_SLOTS + NUM_COLUMNS + NUM_COLUMNS + NUM_SLOTS + 1 + NUM_COLUMNS)
+#define PARAM_VOLUME            500     // + column (1..8)
+#define NUM_PARAMETERS          NUM_COLUMNS
 
 enum ClipState {
     CLIP_EMPTY,
@@ -138,6 +142,7 @@ struct Instance {
     int16_t freeChunks[MAX_POOL_CHUNKS];
     uint32_t freeCount;
     int outOfMemory;            // logged; cleared when a chunk is available again
+    int hasMidiIn;              // the firmware passes routed MIDI to process()
 
     uint64_t now;               // samples recorded since the instance was created
     int wasPlaying;
@@ -153,7 +158,6 @@ struct Instance {
 static struct Instance instances[MAX_INSTANCES];
 static const UnitHostApi * api;
 
-static uint16_t parameterIds[NUM_PARAMETERS];
 static char parameterNames[NUM_PARAMETERS][12];
 
 // --- Math (units have no libm) ------------------------------------------------------------
@@ -529,33 +533,51 @@ static void sceneButtonPressed(struct Instance * inst, int slot, const UnitTimeI
     }
 }
 
-static void processParameters(struct Instance * inst, const UnitTimeInfo * ti, uint64_t blockStart,
-                              UnitParameterChange * changes, size_t count) {
+static void processParameters(struct Instance * inst, UnitParameterChange * changes, size_t count) {
     for (size_t i = 0; i < count; i++) {
         int id = changes[i].parameterId;
-        int pressed = changes[i].midiValue > 0;
         if (id >= PARAM_VOLUME + 1 && id <= PARAM_VOLUME + NUM_COLUMNS) {
             inst->columns[id - PARAM_VOLUME - 1].volumeTarget = changes[i].value;
-        } else if (id == PARAM_DELETE) {
-            inst->deleteHeld = pressed;
-        } else if (!pressed) {
-            continue;
-        } else if (id >= PARAM_SCENE + 1 && id <= PARAM_SCENE + NUM_SLOTS) {
-            sceneButtonPressed(inst, id - PARAM_SCENE - 1, ti);
-        } else if (id >= PARAM_STOP + 1 && id <= PARAM_STOP + NUM_COLUMNS) {
-            struct Column * col = &inst->columns[id - PARAM_STOP - 1];
-            if (col->current >= 0) {
-                queue(col, QUEUE_STOP, ti);
-            } else {
-                col->queued = QUEUE_NONE;
+        }
+    }
+}
+
+static void stopButtonPressed(struct Column * col, const UnitTimeInfo * ti) {
+    if (col->current >= 0) {
+        queue(col, QUEUE_STOP, ti);
+    } else {
+        col->queued = QUEUE_NONE;
+    }
+}
+
+static void processMidi(struct Instance * inst, const UnitProcessHost * host, const UnitTimeInfo * ti, uint64_t blockStart) {
+    if (!inst->hasMidiIn) {
+        return;
+    }
+    for (size_t i = 0; i < host->midiInCount; i++) {
+        UnitMidiPacket p = host->midiIn[i];
+        int cin = p.header & 0x0F;
+        int row = p.midi1 / 10;
+        int column = p.midi1 % 10;
+        if (cin == UNIT_MIDI_CIN_NOTE_ON && p.midi2 > 0) {
+            if (row < 1 || row > 8 || column < 1 || column > NUM_COLUMNS) {
+                continue;
             }
-        } else if (id > PARAM_CAPTURE && id < PARAM_STOP) {
-            captureButtonPressed(inst, id - PARAM_CAPTURE, ti, blockStart);
-        } else if (id >= PARAM_PAD + 20 && id < PARAM_PAD + 90) {
-            int row = (id - PARAM_PAD) / 10;
-            int column = (id - PARAM_PAD) % 10;
-            if (column >= 1 && column <= NUM_COLUMNS) {
+            if (row == 1) {
+                captureButtonPressed(inst, captureBars[column - 1], ti, blockStart);
+            } else {
                 padPressed(inst, &inst->columns[column - 1], 8 - row, ti);
+            }
+        } else if (cin == UNIT_MIDI_CIN_CONTROL_CHANGE) {
+            int pressed = p.midi2 > 0;
+            if (p.midi1 == CC_DELETE) {
+                inst->deleteHeld = pressed;
+            } else if (!pressed) {
+                continue;
+            } else if (p.midi1 >= CC_STOP_FIRST && p.midi1 < CC_STOP_FIRST + NUM_COLUMNS) {
+                stopButtonPressed(&inst->columns[p.midi1 - CC_STOP_FIRST], ti);
+            } else if (column == 9 && row >= 2 && row <= 8) {
+                sceneButtonPressed(inst, 8 - row, ti);
             }
         }
     }
@@ -692,7 +714,8 @@ static void process(void * instance, UnitProcessHost * host,
     uint64_t blockStart = inst->now;
     double blockPpq = playing ? frameCount / samplesPerPpq(ti) : 0.0;
 
-    processParameters(inst, ti, blockStart, parameterChanges, parameterChangeCount);
+    processParameters(inst, parameterChanges, parameterChangeCount);
+    processMidi(inst, host, ti, blockStart);
 
     for (int c = 0; c < NUM_COLUMNS; c++) {
         recordColumn(inst, &inst->columns[c], c < (int)nrInChannels ? inSamples[c] : 0, frameCount);
@@ -840,6 +863,10 @@ static void * createInstance(void) {
             inst->historyChunks = MAX_HISTORY_CHUNKS;
         }
         resetInstance(inst);
+        inst->hasMidiIn = UNIT_PROCESS_HOST_HAS(api, midiInCount);
+        if (!inst->hasMidiIn) {
+            api->log("ClipGrid: this firmware doesn't pass MIDI to units; update the firmware");
+        }
         inst->active = 1;
         api->log("ClipGrid: %d MB, %d s of history per column",
                  (int)(inst->poolChunks * CHUNK_SAMPLES * sizeof(int16_t) / (1024 * 1024)),
@@ -873,27 +900,11 @@ static uint8_t getNumOutputs(void) { return NUM_COLUMNS; }
 static uint8_t getNumParameters(void) { return NUM_PARAMETERS; }
 
 static uint16_t getParameterId(size_t index) {
-    return index < NUM_PARAMETERS ? parameterIds[index] : 0;
+    return index < NUM_PARAMETERS ? PARAM_VOLUME + 1 + index : 0;
 }
 
 static void getParameterName(size_t index, char * name, size_t maxLength) {
     copyString(name, index < NUM_PARAMETERS ? parameterNames[index] : "", maxLength);
-}
-
-static void addParameter(int * count, uint16_t id, const char * prefix, int number) {
-    char * name = parameterNames[*count];
-    int n = 0;
-    while (*prefix) {
-        name[n++] = *prefix++;
-    }
-    if (number >= 10) {
-        name[n++] = '0' + number / 10;
-    }
-    if (number >= 0) {
-        name[n++] = '0' + number % 10;
-    }
-    name[n] = 0;
-    parameterIds[(*count)++] = id;
 }
 
 static const UnitPlugin plugin = {
@@ -912,26 +923,11 @@ static const UnitPlugin plugin = {
 const UnitPlugin * unit_entry(const UnitHostApi * hostApi) {
     api = hostApi;
 
-    // pad21..pad88 (the Launchpad's programmer mode note numbers), bars1..bars16,
-    // stop1..stop8, scene1..scene7, delete, volume1..volume8
-    int count = 0;
-    for (int row = 8; row >= 2; row--) {
-        for (int column = 1; column <= NUM_COLUMNS; column++) {
-            addParameter(&count, PARAM_PAD + row * 10 + column, "pad", row * 10 + column);
-        }
-    }
-    for (int i = 0; i < NUM_COLUMNS; i++) {
-        addParameter(&count, PARAM_CAPTURE + captureBars[i], "bars", captureBars[i]);
-    }
     for (int column = 1; column <= NUM_COLUMNS; column++) {
-        addParameter(&count, PARAM_STOP + column, "stop", column);
-    }
-    for (int scene = 1; scene <= NUM_SLOTS; scene++) {
-        addParameter(&count, PARAM_SCENE + scene, "scene", scene);
-    }
-    addParameter(&count, PARAM_DELETE, "delete", -1);
-    for (int column = 1; column <= NUM_COLUMNS; column++) {
-        addParameter(&count, PARAM_VOLUME + column, "volume", column);
+        char * name = parameterNames[column - 1];
+        copyString(name, "volume", sizeof(parameterNames[0]));
+        name[6] = '0' + column;
+        name[7] = 0;
     }
 
     api->log("ClipGrid unit ready (%d tracks x %d clips)", NUM_COLUMNS, NUM_SLOTS);
