@@ -9,7 +9,7 @@
  *   armed pad          press a capture button: the last bars of the track's input become a clip
  *   capturing pad      blinks red until the capture's last bar is complete; press to cancel
  *   stopped clip       yellow; press: launches at the next bar (blinks green until then)
- *   playing clip       green; press: stops at the next bar
+ *   playing clip       green, brightness following the track's level; press: stops at the next bar
  *
  * The bottom row holds the capture buttons, recording "after the fact" like the Looper unit:
  * 1, 2, 3, 4, 6, 8, 12 and 16 bars. They capture into every armed slot at once. Pressed in
@@ -72,7 +72,19 @@ static const uint16_t poolSizesMB[] = { 56, 48, 40, 32, 24, 16, 8 };
 #define LED_MESSAGES_PER_MS     4.0F    // host delivers at most 16 MIDI events per block
 #define LED_MAX_CREDIT          6.0F
 #define RESYNC_INTERVAL_MS      2000.0F
-#define LED_UNKNOWN             0xFF
+#define LED_UNKNOWN             0xFFFF
+#define LED_RGB                 0x100   // + brightness step: green set with an RGB SysEx (5 packets)
+
+// Playing clips' pads show their track's level: a peak meter, read METER_UPDATE_MS apart
+// so a pad changes at most ~33 times a second, in 3 dB steps from -36 dB
+#define METER_UPDATE_MS         30.0F
+#define METER_RELEASE           0.9998F // per sample: about -80 dB/s at 48 kHz
+#define METER_STEPS             12
+#define METER_MIN_GREEN         10      // RGB green (0..127) of a playing clip in silence
+static const float meterThreshold[METER_STEPS] = {     // 10^(dB/20), -36 dB .. -3 dB
+    0.015849F, 0.022387F, 0.031623F, 0.044668F, 0.063096F, 0.089125F,
+    0.125893F, 0.177828F, 0.251189F, 0.354813F, 0.501187F, 0.707946F,
+};
 
 // Launchpad palette indices
 #define COLOR_OFF               0
@@ -149,7 +161,10 @@ struct Instance {
     int deleteHeld;
     struct Column columns[NUM_COLUMNS];
 
-    uint8_t shown[NUM_LEDS];    // colour the Launchpad shows, LED_UNKNOWN if unsure
+    uint16_t shown[NUM_LEDS];   // colour the Launchpad shows (palette or LED_RGB), LED_UNKNOWN if unsure
+    float meter[NUM_COLUMNS];   // peak level of each column's output
+    uint8_t meterStep[NUM_COLUMNS];
+    float msSinceMeter;
     float msSinceResync;
     float midiCredit;
     int nextLed;
@@ -596,7 +611,7 @@ static void enterProgrammerMode(UnitProcessHost * host) {
     send(host, UNIT_MIDI_CIN_SYSEX_END_3BYTE, 0x0E, 0x01, 0xF7);
 }
 
-static uint8_t clipColor(struct Column * col, int slot, int blink) {
+static uint16_t clipColor(struct Column * col, int slot, int blink, uint8_t meterStep) {
     struct Clip * clip = &col->clips[slot];
     switch (clip->state) {
     case CLIP_ARMED:
@@ -608,7 +623,7 @@ static uint8_t clipColor(struct Column * col, int slot, int blink) {
             return blink ? COLOR_GREEN : COLOR_OFF;
         }
         if (col->current == slot) {
-            return col->queued == QUEUE_STOP && !blink ? COLOR_OFF : COLOR_GREEN;
+            return col->queued == QUEUE_STOP && !blink ? COLOR_OFF : LED_RGB + meterStep;
         }
         return COLOR_YELLOW;
     default:
@@ -617,7 +632,7 @@ static uint8_t clipColor(struct Column * col, int slot, int blink) {
 }
 
 // LEDs 0..63: grid, bottom row first; 64..71: top row; 72..79: right column, bottom first.
-static uint8_t ledColor(struct Instance * inst, int led, int blink) {
+static uint16_t ledColor(struct Instance * inst, int led, int blink) {
     if (led < NUM_GRID_LEDS) {
         int row = led / 8 + 1;
         int column = led % 8;
@@ -631,7 +646,7 @@ static uint8_t ledColor(struct Instance * inst, int led, int blink) {
             }
             return COLOR_DIM_WHITE;
         }
-        return clipColor(&inst->columns[column], 8 - row, blink);
+        return clipColor(&inst->columns[column], 8 - row, blink, inst->meterStep[column]);
     }
     if (led < NUM_GRID_LEDS + 8) {
         struct Column * col = &inst->columns[led - NUM_GRID_LEDS];
@@ -672,15 +687,43 @@ static void updateLeds(struct Instance * inst, UnitProcessHost * host, const Uni
         inst->midiCredit -= 3.0F;
     }
 
-    // Send the LEDs that changed, scanning round-robin so none starves.
-    for (int scanned = 0; scanned < NUM_LEDS && inst->midiCredit >= 1.0F; scanned++) {
+    inst->msSinceMeter += blockMs;
+    if (inst->msSinceMeter >= METER_UPDATE_MS) {
+        inst->msSinceMeter = 0;
+        for (int c = 0; c < NUM_COLUMNS; c++) {
+            int step = 0;
+            while (step < METER_STEPS && inst->meter[c] >= meterThreshold[step]) {
+                step++;
+            }
+            inst->meterStep[c] = step;
+        }
+    }
+
+    // Send the LEDs that changed, scanning round-robin so none starves. An LED that needs
+    // more credit than there is stops the scan, so it goes first once the credit is there.
+    for (int scanned = 0; scanned < NUM_LEDS; scanned++) {
         int led = inst->nextLed;
-        inst->nextLed = (led + 1) % NUM_LEDS;
-        uint8_t color = ledColor(inst, led, blink);
+        uint16_t color = ledColor(inst, led, blink);
         if (inst->shown[led] == color) {
+            inst->nextLed = (led + 1) % NUM_LEDS;
             continue;
         }
-        if (led < NUM_GRID_LEDS) {
+        float cost = color & LED_RGB ? 5.0F : 1.0F;
+        if (inst->midiCredit < cost) {
+            break;
+        }
+        inst->nextLed = (led + 1) % NUM_LEDS;
+        if (color & LED_RGB) {
+            // LED lighting SysEx: F0h 00h 20h 29h 02h 0Dh 03h, then type 3 (RGB), LED, R, G, B, F7h
+            uint8_t note = (led / 8 + 1) * 10 + led % 8 + 1;
+            int step = color & 0xFF;
+            uint8_t green = METER_MIN_GREEN + step * (127 - METER_MIN_GREEN) / METER_STEPS;
+            send(host, UNIT_MIDI_CIN_SYSEX_START, 0xF0, 0x00, 0x20);
+            send(host, UNIT_MIDI_CIN_SYSEX_START, 0x29, 0x02, 0x0D);
+            send(host, UNIT_MIDI_CIN_SYSEX_START, 0x03, 0x03, note);
+            send(host, UNIT_MIDI_CIN_SYSEX_START, 0x00, green, 0x00);
+            send(host, UNIT_MIDI_CIN_SYSEX_END_1BYTE, 0xF7, 0x00, 0x00);
+        } else if (led < NUM_GRID_LEDS) {
             // Programmer mode: row 1 is the bottom row, pad = row * 10 + column
             uint8_t note = (led / 8 + 1) * 10 + led % 8 + 1;
             send(host, UNIT_MIDI_CIN_NOTE_ON, 0x90, note, color);
@@ -690,7 +733,7 @@ static void updateLeds(struct Instance * inst, UnitProcessHost * host, const Uni
             send(host, UNIT_MIDI_CIN_CONTROL_CHANGE, 0xB0, (led - NUM_GRID_LEDS - 8 + 1) * 10 + 9, color);
         }
         inst->shown[led] = color;
-        inst->midiCredit -= 1.0F;
+        inst->midiCredit -= cost;
     }
 }
 
@@ -768,6 +811,7 @@ static void process(void * instance, UnitProcessHost * host,
         float * out = c < (int)nrOutChannels ? outSamples[c] : 0;
         if (!playing || !out) {
             finishFade(inst, col);
+            inst->meter[c] = 0.0F;
             continue;
         }
 
@@ -786,6 +830,16 @@ static void process(void * instance, UnitProcessHost * host,
         if (col->fadePos >= col->fadeLength) {
             finishFade(inst, col);
         }
+
+        float level = inst->meter[c];
+        for (size_t i = 0; i < frameCount; i++) {
+            float x = out[i] < 0 ? -out[i] : out[i];
+            level *= METER_RELEASE;
+            if (x > level) {
+                level = x;
+            }
+        }
+        inst->meter[c] = level;
     }
     inst->wasPlaying = playing;
 
@@ -823,6 +877,11 @@ static void resetInstance(struct Instance * inst) {
     }
     inst->msSinceResync = RESYNC_INTERVAL_MS;
     inst->midiCredit = 0.0F;
+    inst->msSinceMeter = 0.0F;
+    for (int c = 0; c < NUM_COLUMNS; c++) {
+        inst->meter[c] = 0.0F;
+        inst->meterStep[c] = 0;
+    }
     inst->nextLed = 0;
 }
 
