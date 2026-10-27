@@ -29,6 +29,7 @@ running it. `make arm32` or `make aarch64` builds just one.
 | `vumeter/` | example: level meters on a Launchpad Mini MK3 |
 | `drums/` | example: drum sampler playing WAV files from `/samples/drums` (built-in kit as fallback) |
 | `yafr/` | example: plate-style reverb, mono in / stereo out (port of the old built-in YAFR plugin) |
+| `clipgrid/` | Ableton-style clip launcher on a Launchpad Mini MK3: 8 tracks × 7 clips, after-the-fact capture (config in `clipgrid/clipgrid.txt`) |
 | `../wormhole/src/unitloader.c` | the firmware side |
 
 ## ABI (version 1)

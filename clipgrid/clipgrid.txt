@@ -1,0 +1,125 @@
+# ClipGrid on a Launchpad Mini MK3: the config.txt sections to merge into yours.
+# The unit puts the Launchpad in programmer mode, so remove other mappings of
+# .Launchpad_Mini_MK3 notes (e.g. the Looper's loopbars mappings) or they fire too.
+
+[units]
+grid ClipGrid
+
+[audioroutes]
+# Track N records grid:N and plays its clips on grid:N. Route what you need, e.g.
+# a 4-input interface with one track per input, all tracks to outputs 1 and 2:
+.Steinberg_UR44:1   grid:1 1.0
+.Steinberg_UR44:2   grid:2 1.0
+.Steinberg_UR44:3   grid:3 1.0
+.Steinberg_UR44:4   grid:4 1.0
+grid:1              .Steinberg_UR44:1 1.0
+grid:1              .Steinberg_UR44:2 1.0
+grid:2              .Steinberg_UR44:1 1.0
+grid:2              .Steinberg_UR44:2 1.0
+grid:3              .Steinberg_UR44:1 1.0
+grid:3              .Steinberg_UR44:2 1.0
+grid:4              .Steinberg_UR44:1 1.0
+grid:4              .Steinberg_UR44:2 1.0
+
+[midiroutes]
+# LED feedback
+grid      .Launchpad_Mini_MK3
+
+[midimap]
+# Clip slots: rows 8 (top) to 2 of the grid, programmer mode note = row * 10 + column
+.Launchpad_Mini_MK3:noteon81   grid:pad81
+.Launchpad_Mini_MK3:noteon82   grid:pad82
+.Launchpad_Mini_MK3:noteon83   grid:pad83
+.Launchpad_Mini_MK3:noteon84   grid:pad84
+.Launchpad_Mini_MK3:noteon85   grid:pad85
+.Launchpad_Mini_MK3:noteon86   grid:pad86
+.Launchpad_Mini_MK3:noteon87   grid:pad87
+.Launchpad_Mini_MK3:noteon88   grid:pad88
+.Launchpad_Mini_MK3:noteon71   grid:pad71
+.Launchpad_Mini_MK3:noteon72   grid:pad72
+.Launchpad_Mini_MK3:noteon73   grid:pad73
+.Launchpad_Mini_MK3:noteon74   grid:pad74
+.Launchpad_Mini_MK3:noteon75   grid:pad75
+.Launchpad_Mini_MK3:noteon76   grid:pad76
+.Launchpad_Mini_MK3:noteon77   grid:pad77
+.Launchpad_Mini_MK3:noteon78   grid:pad78
+.Launchpad_Mini_MK3:noteon61   grid:pad61
+.Launchpad_Mini_MK3:noteon62   grid:pad62
+.Launchpad_Mini_MK3:noteon63   grid:pad63
+.Launchpad_Mini_MK3:noteon64   grid:pad64
+.Launchpad_Mini_MK3:noteon65   grid:pad65
+.Launchpad_Mini_MK3:noteon66   grid:pad66
+.Launchpad_Mini_MK3:noteon67   grid:pad67
+.Launchpad_Mini_MK3:noteon68   grid:pad68
+.Launchpad_Mini_MK3:noteon51   grid:pad51
+.Launchpad_Mini_MK3:noteon52   grid:pad52
+.Launchpad_Mini_MK3:noteon53   grid:pad53
+.Launchpad_Mini_MK3:noteon54   grid:pad54
+.Launchpad_Mini_MK3:noteon55   grid:pad55
+.Launchpad_Mini_MK3:noteon56   grid:pad56
+.Launchpad_Mini_MK3:noteon57   grid:pad57
+.Launchpad_Mini_MK3:noteon58   grid:pad58
+.Launchpad_Mini_MK3:noteon41   grid:pad41
+.Launchpad_Mini_MK3:noteon42   grid:pad42
+.Launchpad_Mini_MK3:noteon43   grid:pad43
+.Launchpad_Mini_MK3:noteon44   grid:pad44
+.Launchpad_Mini_MK3:noteon45   grid:pad45
+.Launchpad_Mini_MK3:noteon46   grid:pad46
+.Launchpad_Mini_MK3:noteon47   grid:pad47
+.Launchpad_Mini_MK3:noteon48   grid:pad48
+.Launchpad_Mini_MK3:noteon31   grid:pad31
+.Launchpad_Mini_MK3:noteon32   grid:pad32
+.Launchpad_Mini_MK3:noteon33   grid:pad33
+.Launchpad_Mini_MK3:noteon34   grid:pad34
+.Launchpad_Mini_MK3:noteon35   grid:pad35
+.Launchpad_Mini_MK3:noteon36   grid:pad36
+.Launchpad_Mini_MK3:noteon37   grid:pad37
+.Launchpad_Mini_MK3:noteon38   grid:pad38
+.Launchpad_Mini_MK3:noteon21   grid:pad21
+.Launchpad_Mini_MK3:noteon22   grid:pad22
+.Launchpad_Mini_MK3:noteon23   grid:pad23
+.Launchpad_Mini_MK3:noteon24   grid:pad24
+.Launchpad_Mini_MK3:noteon25   grid:pad25
+.Launchpad_Mini_MK3:noteon26   grid:pad26
+.Launchpad_Mini_MK3:noteon27   grid:pad27
+.Launchpad_Mini_MK3:noteon28   grid:pad28
+
+# Capture buttons, bottom row: the last 1, 2, 3, 4, 6, 8, 12, 16 bars
+.Launchpad_Mini_MK3:noteon11   grid:bars1
+.Launchpad_Mini_MK3:noteon12   grid:bars2
+.Launchpad_Mini_MK3:noteon13   grid:bars3
+.Launchpad_Mini_MK3:noteon14   grid:bars4
+.Launchpad_Mini_MK3:noteon15   grid:bars6
+.Launchpad_Mini_MK3:noteon16   grid:bars8
+.Launchpad_Mini_MK3:noteon17   grid:bars12
+.Launchpad_Mini_MK3:noteon18   grid:bars16
+
+# Top row: stop a column
+.Launchpad_Mini_MK3:cc91        grid:stop1
+.Launchpad_Mini_MK3:cc92        grid:stop2
+.Launchpad_Mini_MK3:cc93        grid:stop3
+.Launchpad_Mini_MK3:cc94        grid:stop4
+.Launchpad_Mini_MK3:cc95        grid:stop5
+.Launchpad_Mini_MK3:cc96        grid:stop6
+.Launchpad_Mini_MK3:cc97        grid:stop7
+.Launchpad_Mini_MK3:cc98        grid:stop8
+
+# Right column: launch a scene (row); the bottom one (Stop Solo Mute) is the delete modifier
+.Launchpad_Mini_MK3:cc89        grid:scene1
+.Launchpad_Mini_MK3:cc79        grid:scene2
+.Launchpad_Mini_MK3:cc69        grid:scene3
+.Launchpad_Mini_MK3:cc59        grid:scene4
+.Launchpad_Mini_MK3:cc49        grid:scene5
+.Launchpad_Mini_MK3:cc39        grid:scene6
+.Launchpad_Mini_MK3:cc29        grid:scene7
+.Launchpad_Mini_MK3:cc19        grid:delete
+
+# Track volumes, e.g. on the faders of a nanoKONTROL2
+.nanoKONTROL2:cc00             grid:volume1
+.nanoKONTROL2:cc01             grid:volume2
+.nanoKONTROL2:cc02             grid:volume3
+.nanoKONTROL2:cc03             grid:volume4
+.nanoKONTROL2:cc04             grid:volume5
+.nanoKONTROL2:cc05             grid:volume6
+.nanoKONTROL2:cc06             grid:volume7
+.nanoKONTROL2:cc07             grid:volume8
