@@ -82,6 +82,13 @@ typedef struct UnitProcessHost {
     void (*sendMIDIEvent)(struct UnitHostData * hostData, UnitMidiPacket packet);
     UnitTimeInfo timeInfo;
     struct UnitHostData * hostData;
+
+    // --- Added to ABI 1 later: check UNIT_PROCESS_HOST_HAS(api, field) before using these --
+
+    // MIDI routed to this unit by [midiroutes] (e.g. ".Launchpad_Mini_MK3 grid") that arrived
+    // since the last block, in order. Shares the 16 events per block limit of incoming MIDI.
+    const UnitMidiPacket * midiIn;
+    size_t midiInCount;
 } UnitProcessHost;
 
 // --- The plugin a unit provides ---------------------------------------------------------
@@ -141,11 +148,19 @@ typedef struct UnitHostApi {
     // Directory entry number `index` (0, 1, 2, ...): returns 1 and fills `entry`, 0 after the
     // last entry. Order is the order on disk; names longer than 63 characters are skipped.
     int32_t (*readDirectory)(const char * path, uint32_t index, UnitDirectoryEntry * entry);
+
+    // sizeof(UnitProcessHost) in the firmware: fields of UnitProcessHost beyond it are absent.
+    uint32_t processHostSize;
 } UnitHostApi;
 
 // True if the firmware's UnitHostApi includes `field`.
 #define UNIT_HOST_HAS(api, field) \
     ((api)->size >= offsetof(UnitHostApi, field) + sizeof(((UnitHostApi *)0)->field))
+
+// True if the UnitProcessHost the firmware passes to process() includes `field`.
+#define UNIT_PROCESS_HOST_HAS(api, field) \
+    (UNIT_HOST_HAS(api, processHostSize) && \
+     (api)->processHostSize >= offsetof(UnitProcessHost, field) + sizeof(((UnitProcessHost *)0)->field))
 
 // --- Entry point ------------------------------------------------------------------------
 

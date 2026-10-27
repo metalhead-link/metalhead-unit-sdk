@@ -29,7 +29,7 @@ running it. `make arm32` or `make aarch64` builds just one.
 | `vumeter/` | example: level meters on a Launchpad Mini MK3 |
 | `drums/` | example: drum sampler playing WAV files from `/samples/drums` (built-in kit as fallback) |
 | `yafr/` | example: plate-style reverb, mono in / stereo out (port of the old built-in YAFR plugin) |
-| `clipgrid/` | Ableton-style clip launcher on a Launchpad Mini MK3: 8 tracks × 7 clips, after-the-fact capture (config in `clipgrid/clipgrid.txt`) |
+| `clipgrid/` | Ableton-style clip launcher on a Launchpad Mini MK3: 8 tracks × 7 clips, after-the-fact capture; reads the Launchpad through `midiIn` (config in `clipgrid/clipgrid.txt`) |
 | `../wormhole/src/unitloader.c` | the firmware side |
 
 ## ABI (version 1)
@@ -56,7 +56,9 @@ gets exactly two things from the host:
   access is only allowed from `unit_entry()` and `createInstance()`; the firmware refuses it
   while units' `process()` functions run.
 - `UnitProcessHost`, passed to every `process()` call: transport (`play`/`stop`/`requestTempo`),
-  `sendMIDIEvent`, and the `UnitTimeInfo` for the block.
+  `sendMIDIEvent`, the `UnitTimeInfo` for the block, and `midiIn`/`midiInCount`: the MIDI that
+  `[midiroutes]` sends to the unit (`.Launchpad_Mini_MK3 grid`). `midiIn` was appended later:
+  check `UNIT_PROCESS_HOST_HAS(api, midiIn)` before reading it.
 
 `mkunit.py` refuses any relocation other than `R_ARM_RELATIVE` / `R_AARCH64_RELATIVE`, so a unit that accidentally
 references an outside symbol (`sinf`, `printf`, …) fails at build time, not on the device.
@@ -75,7 +77,8 @@ interrupt.
   channel; use `timeInfo.sampleRate` rather than assuming a block size). Don't block or spin. Floating point and NEON are fine: the IRQ
   handler saves the full VFP/NEON state.
 - Unconnected inputs contain silence; outputs start zeroed.
-- At most **16 MIDI events per block** are delivered, for all units together.
+- At most **16 MIDI events per block** are delivered, for all units together. That holds for
+  the units' MIDI output, and for incoming MIDI (parameter changes and `midiIn` alike).
 - Instances come from `createInstance()`; units keep them in their own static memory (their bss),
   so plan for a fixed maximum, the same as the built-in plugins.
 - `releaseInstance()` gives an instance back when a config reload (`cfgapply`) drops its unit;
