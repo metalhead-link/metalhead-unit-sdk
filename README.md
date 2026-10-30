@@ -30,6 +30,7 @@ upload either the bundle or the separate files, not both (a plugin name can only
 | `unit.mk`, `unit.ld` | shared build rules and linker script |
 | `common/unitrt.c` | `memcpy`/`memset`/`memmove`/`memcmp` linked into every unit |
 | `tools/mkunit.py` | ELF → `.unt` converter |
+| `tools/upload_units.py` | rebuilds every unit and uploads them over the USB serial port (`--bbb`, `--reboot`, unit names; `-h`) |
 | `tools/unittest.c` | `make test`: the plugins compiled for the Mac and exercised through the ABI |
 | `doc/unit-abi-overview.pdf` | printable ABI overview; regenerate with `tools/abi_overview.py` (needs reportlab) |
 | `vumeter/` | example: level meters on a Launchpad Mini MK3 |
