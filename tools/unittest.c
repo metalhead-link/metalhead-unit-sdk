@@ -7,10 +7,12 @@
  * and runs process() with parameter events: every settable parameter is set to its minimum,
  * maximum and default, and getParamValue() has to report each value back.
  *
- *   build/host/unittest [-r <sd card folder>] [-v]
+ *   build/host/unittest [-r <sd card folder>] [-v] [-w <folder>]
  *
  * -r maps the unit's file access (/samples/drums/...) to a folder on the Mac; without it the
- * unit sees no files. -v prints every parameter. Exits with 1 if anything failed.
+ * unit sees no files. -v prints every parameter. -w renders a few seconds of each plugin at its
+ * defaults, playing notes into midiIn and a plucked sawtooth into its inputs, to
+ * <folder>/<plugin>.wav (outputs 1 and 2). Exits with 1 if anything failed.
  *
  * The native build differs from the device: other compiler, other libc (memcpy and friends),
  * no relocations. It tests the plugin logic and the ABI usage, not the code generation.
@@ -23,12 +25,14 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 
 #define FRAMES          48      // one USB frame at 48 kHz
 #define MAX_CHANNELS    32
 #define MAX_EVENTS      16
 
 static const char * root;
+static const char * renderFolder;
 static int verbose;
 static int failures;
 static int midiSent;
@@ -298,14 +302,137 @@ static void testPlugin(const UnitPlugin * plugin, uint32_t index) {
     }
 }
 
+// --- Rendering (-w) ---------------------------------------------------------------------------
+
+#define RENDER_SECONDS  4
+#define RENDER_FRAMES   (RENDER_SECONDS * 48000)
+
+static void writeWav(const char * path, const float * left, const float * right, int frames) {
+    FILE * f = fopen(path, "wb");
+    if (!f) {
+        CHECK(0, "can't write %s", path);
+        return;
+    }
+    uint32_t dataSize = (uint32_t)frames * 4;
+    uint32_t riffSize = 36 + dataSize;
+    uint32_t fmtSize = 16, rate = 48000, byteRate = 48000 * 4;
+    uint16_t format = 1, channels = 2, blockAlign = 4, bits = 16;
+    fwrite("RIFF", 1, 4, f); fwrite(&riffSize, 4, 1, f); fwrite("WAVEfmt ", 1, 8, f);
+    fwrite(&fmtSize, 4, 1, f); fwrite(&format, 2, 1, f); fwrite(&channels, 2, 1, f);
+    fwrite(&rate, 4, 1, f); fwrite(&byteRate, 4, 1, f); fwrite(&blockAlign, 2, 1, f); fwrite(&bits, 2, 1, f);
+    fwrite("data", 1, 4, f); fwrite(&dataSize, 4, 1, f);
+    for (int i = 0; i < frames; i++) {
+        int16_t s[2] = {
+            (int16_t)(fmaxf(-1, fminf(1, left[i])) * 32767),
+            (int16_t)(fmaxf(-1, fminf(1, right[i])) * 32767),
+        };
+        fwrite(s, 2, 2, f);
+    }
+    fclose(f);
+}
+
+// A fresh instance at its defaults; a note every half second into midiIn (C3 E3 G3 C4, note off
+// after 0.3 s), a plucked sawtooth at the same pitch into every input. Blocks of varying size,
+// from 1 to 64 frames, as the Pi (6 per microframe) and the BeagleBone (about 48) both send.
+static void renderPlugin(const UnitPlugin * plugin) {
+    static float left[RENDER_FRAMES], right[RENDER_FRAMES];
+    static float inBuffers[MAX_CHANNELS][64], outBuffers[MAX_CHANNELS][64];
+    static const uint8_t notes[] = { 48, 52, 55, 60 };
+    float * in[MAX_CHANNELS];
+    float * out[MAX_CHANNELS];
+    uint32_t inputs = plugin->getNumInputs();
+    uint32_t outputs = plugin->getNumOutputs();
+    void * instance = plugin->createInstance();
+    if (!instance) {
+        return;
+    }
+    memset(left, 0, sizeof(left));
+    memset(right, 0, sizeof(right));
+    double phase = 0;
+    uint32_t random = 1;
+    clock_t start = clock();
+    for (int pos = 0; pos < RENDER_FRAMES;) {
+        random = random * 1664525 + 1013904223;
+        int frames = 1 + (int)((random >> 16) % 64);
+        if (frames > RENDER_FRAMES - pos) {
+            frames = RENDER_FRAMES - pos;
+        }
+        // MIDI for the events inside this block
+        UnitMidiPacket midi[4];
+        size_t midiCount = 0;
+        for (int i = 0; i < frames; i++) {
+            int t = pos + i;
+            int note = notes[(t / 24000) % 4];
+            if (t % 24000 == 0) {
+                midi[midiCount++] = (UnitMidiPacket) { UNIT_MIDI_CIN_NOTE_ON, 0x90, (uint8_t)note, 100 };
+            } else if (t % 24000 == 14400) {
+                midi[midiCount++] = (UnitMidiPacket) { UNIT_MIDI_CIN_NOTE_OFF, 0x80, (uint8_t)note, 0 };
+            }
+        }
+        for (int i = 0; i < frames; i++) {
+            int t = pos + i;
+            float frequency = 440.0F * powf(2.0F, (notes[(t / 24000) % 4] - 69) / 12.0F);
+            phase += frequency / 48000.0;
+            phase -= floor(phase);
+            float envelope = expf(-(float)(t % 24000) / 4800.0F);
+            for (uint32_t c = 0; c < inputs && c < MAX_CHANNELS; c++) {
+                inBuffers[c][i] = 0.5F * envelope * (float)(2 * phase - 1);
+            }
+        }
+        for (uint32_t c = 0; c < inputs && c < MAX_CHANNELS; c++) {
+            in[c] = inBuffers[c];
+        }
+        for (uint32_t c = 0; c < outputs && c < MAX_CHANNELS; c++) {
+            memset(outBuffers[c], 0, sizeof(outBuffers[c]));
+            out[c] = outBuffers[c];
+        }
+        UnitProcessHost host = {
+            .play = play, .stop = stop, .requestTempo = requestTempo, .sendMIDIEvent = sendMIDIEvent,
+            .timeInfo = {
+                .microSeconds = (uint64_t)pos * 1000000 / 48000, .sampleRate = 48000, .isPlaying = 1,
+                .ppqPos = pos / 24000.0, .barStartPos = floor(pos / 96000.0) * 4, .tempo = 120,
+                .timeSigNumerator = 4,
+            },
+            .midiIn = midi, .midiInCount = midiCount,
+        };
+        plugin->process(instance, &host, inputs, in, outputs, out, frames, 0, 0);
+        for (int i = 0; i < frames; i++) {
+            left[pos + i] = outputs > 0 ? outBuffers[0][i] : 0;
+            right[pos + i] = outputs > 1 ? outBuffers[1][i] : left[pos + i];
+        }
+        pos += frames;
+    }
+    double seconds = (double)(clock() - start) / CLOCKS_PER_SEC;
+    float peak = 0;
+    double sum = 0;
+    int finite = 1;
+    for (int i = 0; i < RENDER_FRAMES; i++) {
+        finite &= isfinite(left[i]) && isfinite(right[i]);
+        peak = fmaxf(peak, fmaxf(fabsf(left[i]), fabsf(right[i])));
+        sum += left[i] * left[i] + right[i] * right[i];
+    }
+    char path[1024];
+    snprintf(path, sizeof(path), "%s/%s.wav", renderFolder, plugin->name);
+    writeWav(path, left, right, RENDER_FRAMES);
+    printf("  rendered %s: peak %.3f, rms %.4f, %.1f%% of real time on this Mac (sanitized build)\n",
+           path, peak, sqrt(sum / (2.0 * RENDER_FRAMES)), 100 * seconds / RENDER_SECONDS);
+    CHECK(finite, "%s: rendered output is not finite", plugin->name);
+    CHECK(outputs == 0 || peak > 1e-4F, "%s: rendered silence", plugin->name);
+    if (plugin->releaseInstance) {
+        plugin->releaseInstance(instance);
+    }
+}
+
 int main(int argc, char ** argv) {
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-r") == 0 && i + 1 < argc) {
             root = argv[++i];
         } else if (strcmp(argv[i], "-v") == 0) {
             verbose = 1;
+        } else if (strcmp(argv[i], "-w") == 0 && i + 1 < argc) {
+            renderFolder = argv[++i];
         } else {
-            fprintf(stderr, "usage: %s [-r <sd card folder>] [-v]\n", argv[0]);
+            fprintf(stderr, "usage: %s [-r <sd card folder>] [-v] [-w <folder>]\n", argv[0]);
             return 2;
         }
     }
@@ -327,6 +454,9 @@ int main(int argc, char ** argv) {
             CHECK(!plugin || strcmp(factory->getPlugin(j)->name, plugin->name) != 0, "two plugins called %s", plugin->name);
         }
         testPlugin(plugin, i);
+        if (renderFolder && plugin && plugin->createInstance) {
+            renderPlugin(plugin);
+        }
     }
     CHECK(!factory->getPlugin(count), "getPlugin(%u) beyond the count returned a plugin", count);
     printf("%s: %u plugins, %d MIDI events sent, %d failures\n", failures ? "FAILED" : "ok", count, midiSent, failures);

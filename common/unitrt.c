@@ -50,3 +50,11 @@ int memcmp(const void * a, const void * b, size_t n) {
     }
     return 0;
 }
+
+// newlib's libm (LIBM := 1 in unit.mk) sets errno through this. Build with -fno-math-errno so
+// the compiler doesn't count on it: units can't read errno meaningfully anyway.
+static int unitErrno;
+
+int * __errno(void) {
+    return &unitErrno;
+}

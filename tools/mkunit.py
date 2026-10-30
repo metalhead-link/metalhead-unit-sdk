@@ -137,6 +137,12 @@ def main():
     image.extend(b'\0' * (image_size - file_end))
     bss_size = max(0, mem_end - image_size)
 
+    # Nothing runs static constructors (C++ globals with constructors, __attribute__((constructor)))
+    for s in elf.sections:
+        if s['size'] and s['name'] in ('.init_array', '.preinit_array', '.ctors'):
+            fail(f'{s["name"]} is not empty: units have no static constructors, '
+                 f'initialise globals in unit_entry() or createInstance()')
+
     # Relocations
     none, relative = ((R_ARM_NONE, R_ARM_RELATIVE) if elf.machine == UNIT_MACHINE_ARM32
                       else (R_AARCH64_NONE, R_AARCH64_RELATIVE))

@@ -37,6 +37,7 @@ upload either the bundle or the separate files, not both (a plugin name can only
 | `yafr/` | example: plate-style reverb, mono in / stereo out (port of the old built-in YAFR plugin) |
 | `clipgrid/` | Ableton-style clip launcher on a Launchpad Mini MK3: 8 tracks × 7 clips, after-the-fact capture; reads the Launchpad through `midiIn` (config in `clipgrid/clipgrid.txt`) |
 | `stock/` | all four examples in one unit file |
+| `mutable/` | Mutable Instruments modules (Plaits, Rings, Clouds, ...) in one unit file, C++; the heavy ones for the Pi only |
 | `../wormhole/src/unitloader.c` | the firmware side |
 
 ## ABI (version 2)
@@ -168,8 +169,18 @@ The device console exposes them for the web UI (`ccs/wormhole/src/configconsole.
 
 ARM (not Thumb) code for Cortex-A8, AAPCS with hard float (`-mcpu=cortex-a8 -mfpu=neon
 -mfloat-abi=hard -marm`), built `-fpie -ffreestanding`. Only libgcc (`arm/v5te/hard`, the variant
-the firmware uses) is linked, for division and the like. There's no libm: compute tables at
-build time, or bring your own approximations.
+the firmware uses) is linked, for division and the like.
+
+`LIBM := 1` in a unit's Makefile also links newlib's libm (`sinf`, `powf`, ...). It isn't built
+position independent, but it needs no relocations mkunit.py refuses: the `arm/v5te` variant has
+no `movw`/`movt`, and on the Pi its code reaches data PC-relative. Its errno goes to a stub in
+`common/unitrt.c`; build with `-fno-math-errno` so `sqrtf` and friends become instructions.
+
+C++ sources (`.cc`, `.cpp`) are built with the same flags minus `-ffreestanding` (the C++
+headers need it off), and with `-fno-rtti -fno-exceptions -fno-threadsafe-statics
+-fno-use-cxa-atexit`: no runtime for any of those. Nothing runs static constructors, so mkunit.py
+refuses a unit with a non-empty `.init_array`: set up globals in `unit_entry()` or
+`createInstance()`. See `mutable/` for a C++ bundle.
 
 ### File format (`.unt`)
 
@@ -244,12 +255,17 @@ SRCS := mygain.c                # sources may come from other unit directories
 include ../unit.mk
 ```
 
+A plugin for one board only goes in `PLUGINS_arm32` or `PLUGINS_aarch64`, with its sources in
+`SRCS_arm32` or `SRCS_aarch64` (`mutable/` keeps the heavy modules off the BeagleBone this way).
+`make test` runs the plugins of both lists.
+
 `make disasm-arm32` shows the code with relocations. `make test` builds the sources for the Mac
 with the address and undefined-behaviour sanitizers and runs `tools/unittest.c` on them: it
 checks the factory, the descriptors and parameters, sets every parameter to its minimum, maximum
 and default and expects `getParamValue` to report them back, presses the triggers, and releases
 and recreates an instance (`TEST_ARGS="-v -r <folder>"` lists the parameters and serves files
-from a folder). `ccs/make-all.sh` builds every unit directory listed in it.
+from a folder; `-w <folder>` renders each plugin to a WAV there, playing notes into `midiIn` and a
+plucked sawtooth into its inputs, in blocks of 1 to 64 frames). `ccs/make-all.sh` builds every unit directory listed in it.
 
 ## Upload protocol
 
@@ -261,7 +277,7 @@ loaded yet. Its reply is `@unitput ok <name> loaded|unchanged|reboot` or
 
 ## Limits (for now)
 
-- 2 MB pool for all units' code and static data, 256 KB per file, 16 unit files, 32 plugins and
+- 8 MB pool for all units' code and static data, 2 MB per file, 16 unit files, 32 plugins and
   1024 parameters in total; 64 MB heap for `allocate()`.
 - Units are never unloaded, so replacing one, or freeing its instances, takes a reboot.
 - Files are read-only, and only while loading. No network or USB access from a unit; only what
