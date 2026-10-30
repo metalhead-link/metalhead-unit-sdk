@@ -6,9 +6,9 @@ Usage: python3 ccs/units/tools/upload_units.py [--bbb] [--build-only] [--reboot]
 
 Every unit directory is built (`make aarch64`, or `make arm32` with --bbb). Then the units
 named on the command line are uploaded, by bundle or directory name (Stock, mutable, ...).
-Without names, the unit files already on the device are uploaded again, or Stock and Mutable
-if it has none. Not all of them: Stock holds the same plugins as VUMeter, Drums, YAFR and
-ClipGrid, and a plugin can only be loaded once.
+Without names, Stock and Mutable are uploaded, and the unit files already on the device again.
+Not every unit: Stock holds the same plugins as VUMeter, Drums, YAFR and ClipGrid, and a plugin
+can only be loaded once. So Stock is left out when the device has one of those files.
 
 A unit that was loaded already is only replaced at the next boot: --reboot reboots the device
 when that's needed. The web UI must not have the port open at the same time.
@@ -26,9 +26,17 @@ from upload_image import LINE, answer, command, open_port     # noqa: E402
 
 DEFAULT = ['Stock', 'Mutable']
 
+# @unitput ok <name> <state>
+MEANING = {
+    'loaded': 'saved and loaded',
+    'unchanged': 'saved; the same as the loaded one',
+    'reboot': 'saved; replaces the loaded one at the next boot',
+}
+
 
 def unit_dirs():
-    """{directory: (NAME, BUNDLE)} of every directory with a unit Makefile"""
+    """{directory: (NAME, BUNDLE, {plugin entry functions})} of every directory with a unit
+    Makefile; only the literal PLUGINS list (mutable/ computes its own, they're unique anyway)"""
     found = {}
     for d in sorted(os.listdir(UNITS)):
         makefile = os.path.join(UNITS, d, 'Makefile')
@@ -37,14 +45,28 @@ def unit_dirs():
         text = open(makefile).read()
         name = re.search(r'^NAME\s*:=\s*(\S+)', text, re.M)
         bundle = re.search(r'^BUNDLE\s*:=\s*(\S+)', text, re.M)
+        plugins = re.search(r'^PLUGINS\s*:=(.*)$', text, re.M)
         if name and bundle:
-            found[d] = (name.group(1), bundle.group(1))
+            entries = {p for p in plugins.group(1).split() if '$' not in p} if plugins else set()
+            found[d] = (name.group(1), bundle.group(1), entries)
     return found
+
+
+def default_units(dirs, built, on_device):
+    """The units on the device and DEFAULT, without those sharing a plugin with one on the device"""
+    plugins = {bundle: entries for _, bundle, entries in dirs.values()}
+    wanted = [u for u in on_device if u in built]
+    for u in DEFAULT:
+        if u in built and u not in wanted and not any(plugins[u] & plugins.get(o, set()) for o in on_device):
+            wanted.append(u)
+        elif u in built and u not in wanted:
+            print(f'{u}: left out, it has plugins of a unit on the device')
+    return wanted
 
 
 def build(dirs, machine):
     built = {}
-    for d, (name, bundle) in dirs.items():
+    for d, (name, bundle, _) in dirs.items():
         if d == 'mutable' and not os.path.isdir(os.path.join(UNITS, d, 'eurorack', 'stmlib')):
             print(f'{d}: skipped, no eurorack sources (git submodule update --init --recursive)')
             continue
@@ -92,7 +114,7 @@ def main():
     machine = 'arm32' if args.bbb else 'aarch64'
 
     dirs = unit_dirs()
-    by_dir = {d: bundle for d, (_, bundle) in dirs.items()}
+    by_dir = {d: bundle for d, (_, bundle, _) in dirs.items()}
     wanted = [by_dir.get(u, u) for u in args.units]
     unknown = [u for u in wanted if u not in by_dir.values()]
     if unknown:
@@ -111,7 +133,7 @@ def main():
     if abi != ours:
         sys.exit(f'the firmware has unit ABI {abi}, these units are ABI {ours}')
     if not wanted:
-        wanted = [u for u in on_device if u in built] or [u for u in DEFAULT if u in built]
+        wanted = default_units(dirs, built, on_device)
         unbuilt = [u for u in on_device if u not in built]
         if unbuilt:
             print(f'on the device but not built here, left alone: {", ".join(unbuilt)}')
@@ -125,11 +147,12 @@ def main():
             continue
         print(f'{bundle}: {os.path.getsize(built[bundle])} bytes ... ', end='', flush=True)
         result = put_unit(fd, built[bundle])
-        print(result.replace('@unitput ', ''))
         m = re.match(r'@unitput ok \S+ (\S+)', result)
         if m:
             states[bundle] = m.group(1)
+            print(MEANING.get(m.group(1), m.group(1)))
         else:
+            print(result.replace('@unitput ', ''))
             failed = True
 
     stale = [u for u, state in states.items() if state == 'reboot']
