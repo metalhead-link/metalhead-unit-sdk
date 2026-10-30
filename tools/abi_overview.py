@@ -34,16 +34,19 @@ NM = CC.replace('gcc', 'nm')
 
 STRUCTS = {
     'UnitMidiPacket': ['header', 'midi0', 'midi1', 'midi2'],
-    'UnitParameterChange': ['unitIndex', 'parameterId', 'midiValue', 'value'],
+    'UnitParamInfo': ['id', 'flags', 'name', 'module', 'minValue', 'maxValue', 'defaultValue'],
+    'UnitParamEvent': ['time', 'id', 'value'],
     'UnitTimeInfo': ['microSeconds', 'sampleRate', 'isPlaying', 'barStartPos', 'ppqPos', 'tempo', 'timeSigNumerator'],
     'UnitProcessHost': ['play', 'stop', 'requestTempo', 'sendMIDIEvent', 'timeInfo', 'hostData', 'midiIn', 'midiInCount'],
-    'UnitPlugin': ['vendorId', 'getName', 'createInstance', 'getNumInputs', 'getNumOutputs', 'getNumParameters',
-                   'getParameterId', 'getParameterName', 'process', 'releaseInstance'],
+    'UnitFactory': ['size', 'getPluginCount', 'getPlugin'],
+    'UnitPlugin': ['size', 'name', 'vendor', 'version', 'description', 'createInstance', 'releaseInstance',
+                   'getNumInputs', 'getNumOutputs', 'getParamCount', 'getParamInfo', 'getParamValue',
+                   'paramValueToText', 'paramTextToValue', 'process'],
     'UnitHostApi': ['abiVersion', 'size', 'log', 'allocate', 'fileSize', 'readFile', 'readDirectory', 'processHostSize'],
     'UnitDirectoryEntry': ['name', 'size', 'isDirectory'],
     'UnitImageHeader': ['magic', 'abiVersion', 'name'],
     'UnitFileHeader': ['magic', 'abiVersion', 'headerSize', 'imageSize', 'bssSize', 'relocCount', 'entryOffset',
-                       'crc32', 'reserved', 'name'],
+                       'crc32', 'machine', 'name'],
 }
 
 
@@ -193,7 +196,7 @@ def pipeline_diagram():
     y1 = H - 72
     xs = [i * (bw + gap) for i in range(5)]
     laptop = [
-        ('unit.c', ['#include <unit_abi.h>', 'UNIT_DECLARE("Name")', 'unit_entry()']),
+        ('plugin sources', ['#include <unit_abi.h>', 'x_plugin(api)', '+ UNIT_BUNDLE (unit.mk)']),
         ('arm-none-eabi-gcc', ['-fpie -ffreestanding', 'cortex-a8, hard float', 'ARM mode']),
         ('ld + unit.ld', ['-pie, linked at 0', '+ unitrt.c, libgcc', 'header section first']),
         ('mkunit.py', ['flatten image', 'collect R_ARM_RELATIVE', 'reject anything else']),
@@ -208,8 +211,8 @@ def pipeline_diagram():
         ('web UI upload', ['unitput + base64 lines', 'or copy to the SD card']),
         ('/units/Name.unt', ['saved next to', 'config.txt; loaded', 'at every boot']),
         ('unitloader.c', ['validate, copy to pool', 'relocate, clean caches', 'call unit_entry(api)']),
-        ('plugin table', ['UnitPlugin registered', 'like built-in plugins', '[units] creates it']),
-        ('audio interrupt', ['process() once per', 'block, with params', 'and MIDI out']),
+        ('plugin table', ['factory\'s UnitPlugins', 'registered like the', 'built-in plugins']),
+        ('audio interrupt', ['process() once per', 'block, with param', 'events and MIDI']),
     ]
     for i, b in enumerate(device):
         box(d, xs[i], y2, bw, bh, b[0], b[1])
@@ -253,16 +256,41 @@ def file_map_diagram(layout):
 # ---------------------------------------------------------------------------------------------
 
 FIELD_INFO = {
+    'UnitFactory': {
+        'size': ('uint32_t', 'sizeof(UnitFactory) the unit was built with'),
+        'getPluginCount': ('uint32_t (*)(void)', 'plugins in this file; fixed after unit_entry'),
+        'getPlugin': ('const UnitPlugin *(*)(uint32_t)', 'plugin number index'),
+    },
     'UnitPlugin': {
-        'vendorId': ('uint32_t', 'free for the unit; not used by the firmware'),
-        'getName': ('void (*)(char *name, size_t max)', 'type name used in [units]; must equal the name in UNIT_DECLARE'),
-        'createInstance': ('void *(*)(void)', 'one per [units] line; NULL if none left. Instances are never destroyed'),
-        'getNumInputs': ('uint8_t (*)(void)', 'audio inputs unit:1..N'),
-        'getNumOutputs': ('uint8_t (*)(void)', 'audio outputs unit:1..N'),
-        'getNumParameters': ('uint8_t (*)(void)', 'parameters reachable from [midimap]'),
-        'getParameterId': ('uint16_t (*)(size_t index)', 'stable id, <b>must be non-zero</b>; arrives in UnitParameterChange'),
-        'getParameterName': ('void (*)(size_t, char *, size_t)', 'name used in [midimap] (unit:name)'),
-        'process': ('void (*)(...)', 'once per audio block, in the audio interrupt (see below)'),
+        'size': ('uint32_t', 'sizeof(UnitPlugin) the unit was built with; later functions only called if present'),
+        'name': ('const char *', 'type name used in [units], [A-Za-z0-9_]{1,31}'),
+        'vendor': ('const char *', 'may be NULL'),
+        'version': ('const char *', 'may be NULL'),
+        'description': ('const char *', 'one line, may be NULL'),
+        'createInstance': ('void *(*)(void)', 'one per [units] line; NULL if none left'),
+        'releaseInstance': ('void (*)(void *)', 'a config reload dropped the unit; may be NULL (leaks)'),
+        'getNumInputs': ('uint32_t (*)(void)', 'audio inputs unit:1..N'),
+        'getNumOutputs': ('uint32_t (*)(void)', 'audio outputs unit:1..N'),
+        'getParamCount': ('uint32_t (*)(void)', 'parameters (CLAP params.count)'),
+        'getParamInfo': ('int (*)(uint32_t, UnitParamInfo *)', '1 if the index is valid (params.get_info)'),
+        'getParamValue': ('int (*)(void *, uint32_t id, double *)', 'an instance\'s current value; main loop (params.get_value)'),
+        'paramValueToText': ('int (*)(id, double, char *, uint32_t)', 'optional: "12.5 ms"'),
+        'paramTextToValue': ('int (*)(id, const char *, double *)', 'optional: parse what the user typed'),
+        'process': ('void (*)(...)', 'once per audio block, in the audio interrupt (see above)'),
+    },
+    'UnitParamInfo': {
+        'id': ('uint32_t', 'stable id, anything but UNIT_INVALID_ID; arrives in UnitParamEvent'),
+        'flags': ('uint32_t', 'UNIT_PARAM_IS_*: CLAP\'s values, plus IS_TRIGGER (1 &lt;&lt; 24)'),
+        'name': ('char[32]', 'used in config.txt as unit:name, [A-Za-z0-9_.-]+'),
+        'module': ('char[32]', 'group for user interfaces ("tank/damping"), or ""'),
+        'minValue': ('double', 'MIDI 0 and preset value 0 map here'),
+        'maxValue': ('double', 'MIDI 127 maps here'),
+        'defaultValue': ('double', 'what a new instance starts with'),
+    },
+    'UnitParamEvent': {
+        'time': ('uint32_t', 'sample offset in the block; 0 for now'),
+        'id': ('uint32_t', 'UnitParamInfo.id'),
+        'value': ('double', 'plain value, minValue..maxValue (rounded if stepped)'),
     },
     'UnitProcessHost': {
         'play': ('void (*)(void)', 'start the transport'),
@@ -283,12 +311,6 @@ FIELD_INFO = {
         'tempo': ('float', 'BPM'),
         'timeSigNumerator': ('int', 'quantum (beats per bar)'),
     },
-    'UnitParameterChange': {
-        'unitIndex': ('uint8_t', 'index of the receiving unit'),
-        'parameterId': ('uint16_t', 'as returned by getParameterId()'),
-        'midiValue': ('uint8_t', 'raw 0..127 (CC value or note velocity)'),
-        'value': ('float', 'midiValue / 127'),
-    },
     'UnitMidiPacket': {
         'header': ('uint8_t', '(cable << 4) | code index number; cable 0 = default jack'),
         'midi0': ('uint8_t', 'status byte (e.g. 0x90 note on, ch 1)'),
@@ -296,14 +318,14 @@ FIELD_INFO = {
         'midi2': ('uint8_t', 'data 2'),
     },
     'UnitHostApi': {
-        'abiVersion': ('uint32_t', 'UNIT_ABI_VERSION of the firmware', 'first'),
-        'size': ('uint32_t', 'sizeof(UnitHostApi) in the firmware', 'first'),
-        'log': ('void (*)(const char *fmt, ...)', 'queued console log; safe from process()', 'first'),
-        'allocate': ('void *(*)(size_t)', 'memory for the unit\'s life, 8-byte aligned, not zeroed; NULL when the 64 MB heap is full', 'added'),
-        'fileSize': ('int32_t (*)(const char *path)', 'size of a file, &lt; 0 if missing or a directory', 'added'),
-        'readFile': ('int32_t (*)(path, offset, buf, len)', 'bytes read, &lt; 0 on error', 'added'),
-        'readDirectory': ('int32_t (*)(path, index, entry *)', '1 = entry filled, 0 = no more, &lt; 0 = error', 'added'),
-        'processHostSize': ('uint32_t', 'sizeof(UnitProcessHost) in the firmware (see UNIT_PROCESS_HOST_HAS)', 'added'),
+        'abiVersion': ('uint32_t', 'UNIT_ABI_VERSION of the firmware'),
+        'size': ('uint32_t', 'sizeof(UnitHostApi) in the firmware'),
+        'log': ('void (*)(const char *fmt, ...)', 'queued console log; safe from process()'),
+        'allocate': ('void *(*)(size_t)', 'memory for the unit\'s life, 8-byte aligned, not zeroed; NULL when the 64 MB heap is full'),
+        'fileSize': ('int32_t (*)(const char *path)', 'size of a file, &lt; 0 if missing or a directory'),
+        'readFile': ('int32_t (*)(path, offset, buf, len)', 'bytes read, &lt; 0 on error'),
+        'readDirectory': ('int32_t (*)(path, index, entry *)', '1 = entry filled, 0 = no more, &lt; 0 = error'),
+        'processHostSize': ('uint32_t', 'sizeof(UnitProcessHost) in the firmware (see UNIT_PROCESS_HOST_HAS)'),
     },
     'UnitDirectoryEntry': {
         'name': ('char[64]', 'file or folder name (longer names are skipped)'),
@@ -319,80 +341,70 @@ FIELD_INFO = {
         'relocCount': ('uint32_t', 'uint32 offsets after the image'),
         'entryOffset': ('uint32_t', 'offset of unit_entry in the image'),
         'crc32': ('uint32_t', 'IEEE CRC-32 (zlib.crc32) of everything after this header'),
-        'reserved': ('uint32_t', '0'),
-        'name': ('char[32]', 'type name, NUL-terminated, [A-Za-z0-9_]{1,31}'),
+        'machine': ('uint32_t', '0 = 32-bit ARM (BeagleBone Black), 1 = 64-bit ARM (Raspberry Pi 5)'),
+        'name': ('char[32]', 'unit file name (/units/&lt;name&gt;.unt), NUL-terminated, [A-Za-z0-9_]{1,31}'),
     },
     'UnitImageHeader': {
         'magic': ('uint32_t', '"UNIT" (0x54494E55)'),
         'abiVersion': ('uint32_t', 'UNIT_ABI_VERSION the unit was built with'),
-        'name': ('char[32]', 'type name; written by UNIT_DECLARE("Name")'),
+        'name': ('char[32]', 'unit file name; written by UNIT_BUNDLE("Name", ...)'),
     },
 }
 
 
 EXAMPLE_UNIT = """#include <unit_abi.h>
 
-UNIT_DECLARE("Gain");                                // type name used in [units]
+#define GAIN 1                                       // parameter id
+static const UnitParamInfo gainInfo = { GAIN, UNIT_PARAM_IS_AUTOMATABLE, "gain", "", 0, 2, 1 };
 
 static float gains[4];
 static int used;
 
-static void copy(char * d, const char * s, size_t max) {
-    size_t i = 0;
-    for (; s[i] && i + 1 < max; i++) d[i] = s[i];
-    if (max) d[i] = 0;
-}
-
-static void getName(char * n, size_t max) { copy(n, __unit_header.name, max); }
 static void * createInstance(void) { if (used == 4) return 0; gains[used] = 1.0F; return &gains[used++]; }
-static uint8_t numIn(void) { return 1; }
-static uint8_t numOut(void) { return 1; }
-static uint8_t numParams(void) { return 1; }
-static uint16_t paramId(size_t i) { return 1; }                      // never 0
-static void paramName(size_t i, char * n, size_t max) { copy(n, "gain", max); }
+static uint32_t numIn(void) { return 1; }
+static uint32_t numOut(void) { return 1; }
+static uint32_t paramCount(void) { return 1; }
+static int paramInfo(uint32_t i, UnitParamInfo * info) { if (i) return 0; *info = gainInfo; return 1; }
+static int paramValue(void * inst, uint32_t id, double * v) {
+    if (id != GAIN) return 0;
+    *v = *(float *)inst;
+    return 1;
+}
 
 static void process(void * inst, UnitProcessHost * host, size_t nIn, float ** in,
                     size_t nOut, float ** out, size_t frames,
-                    UnitParameterChange * changes, size_t nChanges) {
+                    const UnitParamEvent * events, size_t nEvents) {
     float * gain = inst;
-    for (size_t c = 0; c < nChanges; c++) *gain = changes[c].midiValue / 127.0F;
+    for (size_t e = 0; e < nEvents; e++) if (events[e].id == GAIN) *gain = events[e].value;  // 0..2
     for (size_t i = 0; i < frames; i++) out[0][i] = in[0][i] * *gain;
 }
 
-static const UnitPlugin plugin = { .getName = getName, .createInstance = createInstance,
-    .getNumInputs = numIn, .getNumOutputs = numOut, .getNumParameters = numParams,
-    .getParameterId = paramId, .getParameterName = paramName, .process = process };
+static const UnitPlugin plugin = { .size = sizeof(UnitPlugin), .name = "Gain",   // used in [units]
+    .createInstance = createInstance, .getNumInputs = numIn, .getNumOutputs = numOut,
+    .getParamCount = paramCount, .getParamInfo = paramInfo, .getParamValue = paramValue,
+    .process = process };
 
-const UnitPlugin * unit_entry(const UnitHostApi * api) {
-    api->log("Gain unit ready");
+const UnitPlugin * gain_plugin(const UnitHostApi * api) {   // listed in PLUGINS
+    api->log("Gain ready");
     return &plugin;
 }
 """
 
 
-def struct_table(layout, name, extra_col=None):
+def struct_table(layout, name):
     info = FIELD_INFO[name]
-    head = ['Offset', 'Size', 'Field', 'Type', 'Meaning']
-    widths = [13 * mm, 11 * mm, 34 * mm, 44 * mm, 68 * mm]
-    if extra_col:
-        head.insert(0, extra_col)
-        widths = [11 * mm, 12 * mm, 10 * mm, 30 * mm, 44 * mm, 63 * mm]
-    rows = [head]
+    rows = [['Offset', 'Size', 'Field', 'Type', 'Meaning']]
     for f, (off, size) in sorted(layout[name]['fields'].items(), key=lambda kv: kv[1][0]):
         t = info[f]
-        row = [str(off), str(size), f, t[0], t[1]]
-        if extra_col:
-            row.insert(0, 'v1' if t[2] == 'first' else 'v1+')
-        rows.append(row)
-    mono = (2, 3) if not extra_col else (3, 4)
-    return table(rows, widths, mono_cols=mono)
+        rows.append([str(off), str(size), f, t[0], t[1]])
+    return table(rows, [13 * mm, 11 * mm, 30 * mm, 50 * mm, 66 * mm], mono_cols=(2, 3))
 
 
-def struct_section(layout, name, intro, extra_col=None):
+def struct_section(layout, name, intro):
     return KeepTogether([
-        P(f'{name} <font color="#6b6b66" size="9">  {layout[name]["size"]} bytes</font>', 'h2'),
+        P(f'{name} <font color="#6b6b66" size="9">  {layout[name]["size"]} bytes (BBB)</font>', 'h2'),
         P(intro),
-        struct_table(layout, name, extra_col),
+        struct_table(layout, name),
         Spacer(1, 4),
     ])
 
@@ -408,13 +420,14 @@ def build(out):
         Spacer(1, 4 * mm),
         P('Metalhead unit ABI', 'title'),
         P(f'Version {abi} &nbsp;·&nbsp; loadable units for the metalhead firmware &nbsp;·&nbsp; {today}', 'subtitle'),
-        P('A <b>unit</b> is an audio/MIDI plugin built on the laptop, separately from the firmware, and loaded by the '
-          'running device. It is uploaded from the web UI (or copied to the SD card), stored as '
-          f'{code("/units/&lt;Name&gt;.unt")} next to {code("config.txt")}, loaded at every boot and then used in '
-          f'{code("[units]")} like a built-in plugin. This document summarises the binary interface between the two: '
-          f'what a unit file contains, how it is loaded, which functions run where, and the exact layout of every '
-          f'structure. The source of truth is {code("ccs/units/include/unit_abi.h")}; offsets and sizes below come '
-          'from the ARM compiler.'),
+        P('A <b>unit</b> is a file of audio/MIDI plugins built on the laptop, separately from the firmware, and loaded '
+          'by the running device. It is uploaded from the web UI (or copied to the SD card), stored as '
+          f'{code("/units/&lt;Name&gt;.unt")} next to {code("config.txt")}, loaded at every boot, and its plugins are then '
+          f'used in {code("[units]")} like the built-in ones. Plugins and parameters follow CLAP: a factory, a plugin '
+          'descriptor, parameter infos with plain value ranges, and parameter events. This document summarises the '
+          f'binary interface: what a unit file contains, how it is loaded, which functions run where, and the exact '
+          f'layout of every structure. The source of truth is {code("ccs/units/include/unit_abi.h")}; offsets and '
+          'sizes below come from the ARM compiler (BeagleBone Black; on the Raspberry Pi 5 pointers are 8 bytes).'),
         Spacer(1, 3 * mm),
     ]
     tiles = [
@@ -422,8 +435,8 @@ def build(out):
         ('Target', 'Cortex-A8, ARM mode', 'AAPCS, hard float, NEON'),
         ('Code', 'Position independent', '-fpie, freestanding, libgcc only'),
         ('Relocations', 'R_ARM_RELATIVE only', 'base address added per word'),
-        ('Host services', f'{len(STRUCTS["UnitHostApi"]) - 2} functions', 'log, allocate, 3 file reads'),
-        ('Plugin interface', f'{layout["UnitPlugin"]["size"]}-byte vtable', 'identical to the firmware\'s'),
+        ('Host services', f'{len(STRUCTS["UnitHostApi"]) - 3} functions', 'log, allocate, 3 file reads'),
+        ('Plugins', 'Bundles, CLAP-style', f'{layout["UnitPlugin"]["size"]}-byte descriptor + vtable'),
     ]
     cells = [[Table([[P(label.upper(), 'tilelabel')], [P(value, 'tilevalue')], [P(sub, 'small')]],
                     colWidths=[54 * mm], style=[('LEFTPADDING', (0, 0), (-1, -1), 0), ('TOPPADDING', (0, 0), (-1, -1), 1),
@@ -446,15 +459,19 @@ def build(out):
     story += [CondPageBreak(90 * mm), P('Lifecycle and calling contexts', 'h1'),
               P('The loader validates the file, copies the image into a 2 MB code pool in DDR, zeroes its bss, adds the '
                 'load address to every relocated word, cleans the D-cache, invalidates the I-cache and branch predictor, '
-                'calls unit_entry and registers the returned plugin. Units are never unloaded.')]
+                'calls unit_entry and registers every plugin of the returned factory, all or none. Units are never '
+                'unloaded.')]
     story.append(table([
         ['Call', 'When', 'Runs in', 'Allowed'],
-        ['unit_entry(api)', 'once, at boot (before config.txt) or right after an upload', 'main loop',
+        ['unit_entry(api), x_plugin(api)', 'once, at boot (before config.txt) or right after an upload', 'main loop',
          'everything: log, allocate, file access, slow set-up work (e.g. loading samples)'],
         ['createInstance()', 'for each [units] line when config.txt is loaded', 'main loop',
          'log, allocate, file access; return NULL when out of instances'],
-        ['getName, getNum*, getParameter*', 'while loading the unit and resolving config.txt', 'main loop',
+        ['getNum*, getParamCount, getParamInfo, paramValueToText, paramTextToValue',
+         'while loading the unit, resolving config.txt, and for the web UI', 'main loop',
          'must be pure and return the same answers every time'],
+        ['getParamValue(instance, ...)', 'for the web UI (paramget)', 'main loop, interruptible by process()',
+         'read a value process() keeps up to date; don\'t compute'],
         ['process(...)', 'once per audio block (one USB frame of samples)', '<b>audio interrupt</b>',
          'log and sendMIDIEvent only. No file access (refused), no allocate, no blocking or waiting'],
     ], [38 * mm, 48 * mm, 22 * mm, 62 * mm], mono_cols=(0,)))
@@ -463,35 +480,40 @@ def build(out):
         '             size_t nrInChannels,  float ** inSamples,    // unconnected inputs contain silence\n'
         '             size_t nrOutChannels, float ** outSamples,   // outputs start zeroed; add into them\n'
         '             size_t frameCount,                           // samples per channel in this block\n'
-        '             UnitParameterChange * parameterChanges, size_t parameterChangeCount);')]
+        '             const UnitParamEvent * paramEvents, size_t paramEventCount);  // apply these first')]
     story += [Spacer(1, 3 * mm), callout(
-        '<b>Things that bite.</b> Parameter ids must be non-zero (0 means "no such parameter" to the firmware). '
-        f'UnitParameterChange is {layout["UnitParameterChange"]["size"]} bytes, not 8: it is a packed union of an '
-        'unpacked struct, so <i>value</i> sits at offset 8. At most 16 MIDI events are delivered per block for all units '
-        'together. Floating point and NEON are fine in process(): the IRQ handler saves the full VFP/NEON state.',
-        'warn')]
+        '<b>Parameter values are plain.</b> A parameter declares minValue..maxValue in its own unit (40..240 BPM, '
+        '0..50 ms) and events carry values in that range. MIDI controllers and [presets] still use 0..127: the firmware '
+        'maps 0 to minValue and 127 to maxValue and rounds stepped parameters. Trigger parameters (IS_TRIGGER) are '
+        'actions, such as a button or a drum hit with the velocity as value, and have no value for getParamValue. '
+        'Unlike CLAP, parameters belong to the plugin, not the instance. At most 16 MIDI events are delivered per block '
+        'for all units together. Floating point and NEON are fine in process(): the IRQ handler saves the full VFP/NEON '
+        'state.', 'warn')]
 
     # --- Structures ---------------------------------------------------------------------------
     story += [CondPageBreak(120 * mm), P('Structures', 'h1'),
               P('All structures are little endian with natural ARM EABI alignment unless noted. The firmware '
                 f'static-asserts that the size and every field offset match its own plugin structures '
                 f'({code("unitloader.c")}), so a unit\'s UnitPlugin goes straight into the plugin table.')]
-    story.append(struct_section(layout, 'UnitPlugin', 'Returned by unit_entry. Every function pointer must point into the unit\'s own image (the loader checks).'))
+    story.append(struct_section(layout, 'UnitFactory', 'Returned by unit_entry (clap_plugin_factory); UNIT_BUNDLE defines it. Must point into the unit\'s own image, as must everything below (the loader checks).'))
+    story.append(struct_section(layout, 'UnitPlugin', 'One per plugin in the file: the descriptor (clap_plugin_descriptor) and the functions, including the params extension.'))
+    story.append(struct_section(layout, 'UnitParamInfo', 'Filled by getParamInfo (clap_param_info without the cookie). The firmware checks every parameter when the plugin is loaded.'))
+    story.append(struct_section(layout, 'UnitParamEvent', 'A parameter change for process() (clap_event_param_value), from [midimap], [presets] or the web UI (paramset).'))
     story.append(struct_section(layout, 'UnitProcessHost', 'Passed to every process() call; only valid during that call.'))
     story.append(struct_section(layout, 'UnitTimeInfo', 'Embedded in UnitProcessHost at offset %d.' % layout['UnitProcessHost']['fields']['timeInfo'][0]))
-    story.append(struct_section(layout, 'UnitParameterChange', 'Produced from [midimap]: a CC or note on a device mapped to unit:parameter.'))
     story.append(struct_section(layout, 'UnitMidiPacket', 'A USB-MIDI event packet. SysEx is sent as CIN 0x4 packets followed by a 0x5-0x7 end packet.'))
     story.append(struct_section(layout, 'UnitHostApi',
-                                'Passed to unit_entry; stays valid and may be kept. Fields marked v1+ were appended to ABI 1 after its first '
-                                'release: check <font face="Courier">UNIT_HOST_HAS(api, field)</font> before calling them, so the unit still '
-                                'loads on older firmware.', extra_col='Since'))
+                                'Passed to unit_entry; stays valid and may be kept. Services added later are appended: check '
+                                '<font face="Courier">UNIT_HOST_HAS(api, field)</font> before calling them, so the unit still loads on '
+                                'older firmware.'))
     story.append(struct_section(layout, 'UnitDirectoryEntry', 'Filled by readDirectory. Entries are returned in on-disk order; sort if order matters.'))
 
     # --- File format ---------------------------------------------------------------------------
     story += [CondPageBreak(110 * mm), P('The .unt file', 'h1'), file_map_diagram(layout), Spacer(1, 2 * mm),
-              P('The image is linked at address 0 and starts with the UnitImageHeader that UNIT_DECLARE places in the '
-                '.unit_header section. After loading at address <i>base</i>, the loader adds <i>base</i> to the 32-bit word at '
-                'each relocation offset. The firmware allocates imageSize + bssSize bytes, 64-byte aligned.')]
+              P('The image is linked at address 0 and starts with the UnitImageHeader that UNIT_BUNDLE places in the '
+                '.unit_header section. After loading at address <i>base</i>, the loader adds <i>base</i> to the pointer-sized '
+                'word at each relocation offset. The firmware allocates imageSize + bssSize bytes, 64-byte aligned on the BBB '
+                'and 4 KiB aligned on the Pi.')]
     story.append(struct_section(layout, 'UnitFileHeader', 'Written by mkunit.py.'))
     story.append(struct_section(layout, 'UnitImageHeader', 'First bytes of the image; checked against the file header.'))
 
@@ -502,14 +524,17 @@ def build(out):
         'CRC-32 over image and relocations',
         'entry point and every relocation inside the image, 4-byte aligned',
         'image header magic, ABI version and name match the file header',
-        'after unit_entry: the plugin and all its function pointers lie inside the unit\'s image',
-        'getName() returns the name in the file; no built-in plugin or loaded unit has that name',
+        'after unit_entry: the factory, every plugin, its strings and function pointers lie inside the unit\'s image',
+        'plugin size at least sizeof(UnitPlugin); valid and unique plugin names (no built-in or loaded plugin has one)',
+        'parameters: valid unique names and ids, finite values, minValue &lt;= defaultValue &lt;= maxValue',
+        'the file\'s plugins are registered all or none',
     ]
     story.append(KeepTogether([P('What the loader checks', 'h1'),
                                table([[f'{i + 1}', c] for i, c in enumerate(checks)], [8 * mm, 162 * mm], header=False)]))
     story += [Spacer(1, 3 * mm), KeepTogether([P('Versioning rules', 'h1'), table([
         ['Change', 'Version', 'Effect on existing units'],
-        ['Append a service to the end of UnitHostApi', f'stays {abi}', 'none; new units check UNIT_HOST_HAS before using it'],
+        ['Append a service to UnitHostApi or a field to UnitProcessHost', f'stays {abi}', 'none; new units check UNIT_HOST_HAS before using it'],
+        ['Append a function to UnitPlugin or UnitFactory', f'stays {abi}', 'none; the firmware checks the size before calling it'],
         ['Change, reorder or remove any field; change a calling convention or a meaning', 'bump UNIT_ABI_VERSION', 'refused by the loader and the web UI until rebuilt'],
         ['Change the firmware\'s plugin structures (plugins.h)', 'n/a', 'the firmware stops compiling (static asserts) until the ABI is updated'],
     ], [78 * mm, 32 * mm, 60 * mm])])]
@@ -517,7 +542,7 @@ def build(out):
         ['Resource', 'Limit'],
         ['Unit code and static data', '2 MB pool for all units; 256 KB per .unt file'],
         ['Heap (allocate)', '64 MB shared by all units (0x8C000000 to 0x90000000), never freed'],
-        ['Units / plugins', '16 loaded units; 32 plugins including the built-in ones'],
+        ['Units / plugins', '16 unit files; 32 plugins and 1024 parameters including the built-in ones'],
         ['MIDI out', '16 events per audio block, all units together'],
         ['Files', 'read only, and only from unit_entry / createInstance'],
         ['Replacing a unit', 'saved immediately; the new version loads at the next reboot'],
@@ -525,12 +550,15 @@ def build(out):
 
     # --- Writing a unit --------------------------------------------------------------------------
     story += [CondPageBreak(120 * mm), P('A minimal unit', 'h1'), code_block(EXAMPLE_UNIT), Spacer(1, 2 * mm),
-        P(f'Build with a three-line Makefile ({code("NAME := gain")}, {code("SRCS := gain.c")}, '
-          f'{code("include ../unit.mk")}) to get {code("build/gain.unt")}. Then use it in config.txt:'),
+        P(f'Build with a short Makefile ({code("NAME := gain")}, {code("BUNDLE := Gain")}, '
+          f'{code("PLUGINS := gain_plugin")}, {code("SRCS := gain.c")}, {code("include ../unit.mk")}) to get '
+          f'{code("build/arm32/gain.unt")} and {code("build/aarch64/gain.unt")}; unit.mk generates the UNIT_BUNDLE line, '
+          f'and {code("make test")} runs the plugin on the Mac. Then use it in config.txt (cc0 0..127 sweeps the gain 0..2):'),
         code_block('[units]\namp Gain\n[audioroutes]\n.Scarlett_2i2_USB:1 amp:1\namp:1 .device:1\n[midimap]\n.nanoKONTROL2:cc0 amp:gain'),
         Spacer(1, 2 * mm),
-        P('Units in the repository: <b>vumeter</b> (level meters on a Launchpad Mini MK3, MIDI out) and <b>drums</b> '
-          '(sampler that loads WAV files from /samples/drums with readDirectory/readFile/allocate).')]
+        P('Units in the repository: <b>vumeter</b> (level meters on a Launchpad Mini MK3, MIDI out), <b>drums</b> '
+          '(sampler that loads WAV files from /samples/drums with readDirectory/readFile/allocate), <b>yafr</b> (reverb), '
+          '<b>clipgrid</b> (clip launcher), and <b>stock</b>: all four in one bundle.')]
 
     # --- Upload protocol ---------------------------------------------------------------------------
     story += [KeepTogether([P('Upload protocol', 'h1'),
@@ -539,11 +567,14 @@ def build(out):
                 'uses as the acknowledgement for every line.'),
               table([
                   ['Command', 'Reply'],
-                  ['unitls', '@unitabi &lt;version&gt;, then @unit &lt;name&gt; &lt;bytes&gt; &lt;loaded|reboot|failed|new&gt; per file in /units'],
+                  ['unitls', '@unitabi &lt;version&gt;, then @unit &lt;name&gt; &lt;bytes&gt; &lt;loaded|reboot|failed|new&gt; &lt;plugin,...&gt; per file in /units'],
                   ['unitput &lt;bytes&gt;', '@unitput ready; then base64 lines (768 characters, a multiple of 4) until unitend'],
                   ['unitend', '@unitput ok &lt;name&gt; &lt;loaded|unchanged|reboot&gt;  or  @unitput error &lt;reason&gt;'],
                   ['unitrm &lt;name&gt;', '@unitrm ok (the unit stays loaded until the next reboot)'],
                   ['cfgabort', 'leaves unitput (or cfgput) mode without saving'],
+                  ['cfgplugins', '@plugin, @plugindesc and an @param &lt;plugin&gt; &lt;index&gt; &lt;id&gt; &lt;flags&gt; &lt;min&gt; &lt;max&gt; &lt;default&gt; &lt;name&gt; [&lt;module&gt;] line per parameter'],
+                  ['paramget &lt;unit&gt;', '@paramvalue &lt;unit&gt; &lt;parameter&gt; &lt;value&gt; &lt;text&gt; per parameter with a value'],
+                  ['paramset &lt;unit&gt;:&lt;param&gt; &lt;value&gt;', '@paramset ok &lt;value&gt; &lt;text&gt;  or  @paramset error &lt;message&gt;'],
               ], [34 * mm, 136 * mm], mono_cols=(0, 1))])]
 
     # --- Page template ---------------------------------------------------------------------------

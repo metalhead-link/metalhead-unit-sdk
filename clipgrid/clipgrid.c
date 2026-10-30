@@ -38,8 +38,6 @@
  */
 #include <unit_abi.h>
 
-UNIT_DECLARE("ClipGrid");
-
 #define MAX_INSTANCES           1       // an instance owns the Launchpad and most of the unit heap
 
 #define NUM_COLUMNS             8
@@ -172,8 +170,6 @@ struct Instance {
 
 static struct Instance instances[MAX_INSTANCES];
 static const UnitHostApi * api;
-
-static char parameterNames[NUM_PARAMETERS][12];
 
 // --- Math (units have no libm) ------------------------------------------------------------
 
@@ -548,11 +544,11 @@ static void sceneButtonPressed(struct Instance * inst, int slot, const UnitTimeI
     }
 }
 
-static void processParameters(struct Instance * inst, UnitParameterChange * changes, size_t count) {
+static void processParameters(struct Instance * inst, const UnitParamEvent * events, size_t count) {
     for (size_t i = 0; i < count; i++) {
-        int id = changes[i].parameterId;
+        uint32_t id = events[i].id;
         if (id >= PARAM_VOLUME + 1 && id <= PARAM_VOLUME + NUM_COLUMNS) {
-            inst->columns[id - PARAM_VOLUME - 1].volumeTarget = changes[i].value;
+            inst->columns[id - PARAM_VOLUME - 1].volumeTarget = events[i].value;
         }
     }
 }
@@ -743,7 +739,7 @@ static void process(void * instance, UnitProcessHost * host,
                     size_t nrInChannels, float ** inSamples,
                     size_t nrOutChannels, float ** outSamples,
                     size_t frameCount,
-                    UnitParameterChange * parameterChanges, size_t parameterChangeCount) {
+                    const UnitParamEvent * paramEvents, size_t paramEventCount) {
     struct Instance * inst = instance;
     if (!inst || !frameCount) {
         return;
@@ -757,7 +753,7 @@ static void process(void * instance, UnitProcessHost * host,
     uint64_t blockStart = inst->now;
     double blockPpq = playing ? frameCount / samplesPerPpq(ti) : 0.0;
 
-    processParameters(inst, parameterChanges, parameterChangeCount);
+    processParameters(inst, paramEvents, paramEventCount);
     processMidi(inst, host, ti, blockStart);
 
     for (int c = 0; c < NUM_COLUMNS; c++) {
@@ -950,45 +946,55 @@ static void copyString(char * dest, const char * src, size_t maxLength) {
     }
 }
 
-static void getName(char * name, size_t maxLength) {
-    copyString(name, __unit_header.name, maxLength);
+static uint32_t getNumInputs(void) { return NUM_COLUMNS; }
+static uint32_t getNumOutputs(void) { return NUM_COLUMNS; }
+static uint32_t getParamCount(void) { return NUM_PARAMETERS; }
+
+// volume1 .. volume8
+static int getParamInfo(uint32_t index, UnitParamInfo * info) {
+    if (index >= NUM_PARAMETERS) {
+        return 0;
+    }
+    *info = (UnitParamInfo) {
+        .id = PARAM_VOLUME + 1 + index,
+        .flags = UNIT_PARAM_IS_AUTOMATABLE,
+        .module = "tracks",
+        .minValue = 0,
+        .maxValue = 1,
+        .defaultValue = 1,
+    };
+    copyString(info->name, "volume", sizeof(info->name));
+    info->name[6] = '1' + index;
+    info->name[7] = 0;
+    return 1;
 }
 
-static uint8_t getNumInputs(void) { return NUM_COLUMNS; }
-static uint8_t getNumOutputs(void) { return NUM_COLUMNS; }
-static uint8_t getNumParameters(void) { return NUM_PARAMETERS; }
-
-static uint16_t getParameterId(size_t index) {
-    return index < NUM_PARAMETERS ? PARAM_VOLUME + 1 + index : 0;
-}
-
-static void getParameterName(size_t index, char * name, size_t maxLength) {
-    copyString(name, index < NUM_PARAMETERS ? parameterNames[index] : "", maxLength);
+static int getParamValue(void * instance, uint32_t id, double * value) {
+    if (id < PARAM_VOLUME + 1 || id > PARAM_VOLUME + NUM_COLUMNS) {
+        return 0;
+    }
+    *value = ((struct Instance *)instance)->columns[id - PARAM_VOLUME - 1].volumeTarget;
+    return 1;
 }
 
 static const UnitPlugin plugin = {
-    .vendorId = 0,
-    .getName = getName,
+    .size = sizeof(UnitPlugin),
+    .name = "ClipGrid",
+    .vendor = "metalhead",
+    .version = "1.1",
+    .description = "Clip launcher on a Launchpad Mini MK3: 8 tracks x 7 clips",
     .createInstance = createInstance,
+    .releaseInstance = releaseInstance,
     .getNumInputs = getNumInputs,
     .getNumOutputs = getNumOutputs,
-    .getNumParameters = getNumParameters,
-    .getParameterId = getParameterId,
-    .getParameterName = getParameterName,
+    .getParamCount = getParamCount,
+    .getParamInfo = getParamInfo,
+    .getParamValue = getParamValue,
     .process = process,
-    .releaseInstance = releaseInstance,
 };
 
-const UnitPlugin * unit_entry(const UnitHostApi * hostApi) {
+const UnitPlugin * clipgrid_plugin(const UnitHostApi * hostApi) {
     api = hostApi;
-
-    for (int column = 1; column <= NUM_COLUMNS; column++) {
-        char * name = parameterNames[column - 1];
-        copyString(name, "volume", sizeof(parameterNames[0]));
-        name[6] = '0' + column;
-        name[7] = 0;
-    }
-
     api->log("ClipGrid unit ready (%d tracks x %d clips)", NUM_COLUMNS, NUM_SLOTS);
     return &plugin;
 }

@@ -33,8 +33,6 @@
  */
 #include <unit_abi.h>
 
-UNIT_DECLARE("Drums");
-
 #define SAMPLE_FOLDER       "/samples/drums"
 #define SAMPLE_RATE         48000
 #define MAX_SOUNDS          32
@@ -727,21 +725,24 @@ static void trigger(struct Instance * inst, int sound, uint8_t velocity) {
     };
 }
 
+// Parameter ids: the sounds are 1..soundCount, in name order
+#define PARAM_VOLUME        1000
+
 static void process(void * instance, UnitProcessHost * host,
                     size_t nrInChannels, float ** inSamples,
                     size_t nrOutChannels, float ** outSamples,
                     size_t frameCount,
-                    UnitParameterChange * parameterChanges, size_t parameterChangeCount) {
+                    const UnitParamEvent * paramEvents, size_t paramEventCount) {
     struct Instance * inst = instance;
     if (!inst || nrOutChannels < 2) {
         return;
     }
-    for (size_t c = 0; c < parameterChangeCount; c++) {
-        int index = parameterChanges[c].parameterId - 1;
-        if (index >= 0 && index < soundCount) {
-            trigger(inst, index, parameterChanges[c].midiValue);
-        } else if (index == soundCount) {
-            inst->volume = parameterChanges[c].midiValue / 127.0F;
+    for (size_t c = 0; c < paramEventCount; c++) {
+        uint32_t id = paramEvents[c].id;
+        if (id >= 1 && id <= (uint32_t)soundCount) {
+            trigger(inst, id - 1, (uint8_t)(paramEvents[c].value * 127.0 + 0.5));   // value: velocity 0..1
+        } else if (id == PARAM_VOLUME) {
+            inst->volume = paramEvents[c].value;
         }
     }
 
@@ -785,10 +786,6 @@ static void process(void * instance, UnitProcessHost * host,
 // Plugin interface
 // =============================================================================================
 
-static void getName(char * name, size_t maxLength) {
-    copyString(name, __unit_header.name, maxLength);
-}
-
 static void * createInstance(void) {
     for (int i = 0; i < MAX_INSTANCES; i++) {
         if (!instances[i].active) {
@@ -804,32 +801,63 @@ static void releaseInstance(void * instance) {
     ((struct Instance *)instance)->active = 0;
 }
 
-static uint8_t getNumInputs(void) { return 0; }
-static uint8_t getNumOutputs(void) { return 2; }
-static uint8_t getNumParameters(void) { return soundCount + 1; }    // the sounds, then volume
+static uint32_t getNumInputs(void) { return 0; }
+static uint32_t getNumOutputs(void) { return 2; }
+static uint32_t getParamCount(void) { return soundCount + 1; }    // the sounds, then volume
 
-// Parameter ids must be non-zero (the firmware treats 0 as "no such parameter").
-static uint16_t getParameterId(size_t index) {
-    return index <= (size_t)soundCount ? index + 1 : 0;
+static int getParamInfo(uint32_t index, UnitParamInfo * info) {
+    if (index < (uint32_t)soundCount) {
+        const struct Sound * sound = &sounds[index];
+        *info = (UnitParamInfo) {
+            .id = index + 1,
+            .flags = UNIT_PARAM_IS_TRIGGER,     // value: velocity
+            .minValue = 0,
+            .maxValue = 1,
+            .defaultValue = 0,
+        };
+        copyString(info->name, sound->name, sizeof(info->name));
+        copyString(info->module, sound->chokeGroup ? groupNames[sound->chokeGroup - 1] : "", sizeof(info->module));
+        return 1;
+    }
+    if (index == (uint32_t)soundCount) {
+        *info = (UnitParamInfo) {
+            .id = PARAM_VOLUME,
+            .flags = UNIT_PARAM_IS_AUTOMATABLE,
+            .name = "volume",
+            .minValue = 0,
+            .maxValue = 1,
+            .defaultValue = 0.8,
+        };
+        return 1;
+    }
+    return 0;
 }
 
-static void getParameterName(size_t index, char * name, size_t maxLength) {
-    copyString(name, index < (size_t)soundCount ? sounds[index].name : index == (size_t)soundCount ? "volume" : "", maxLength);
+static int getParamValue(void * instance, uint32_t id, double * value) {
+    if (id != PARAM_VOLUME) {
+        return 0;           // the sounds are triggers
+    }
+    *value = ((struct Instance *)instance)->volume;
+    return 1;
 }
 
 static const UnitPlugin plugin = {
-    .getName = getName,
+    .size = sizeof(UnitPlugin),
+    .name = "Drums",
+    .vendor = "metalhead",
+    .version = "1.1",
+    .description = "Drum sampler playing the WAV files in /samples/drums",
     .createInstance = createInstance,
+    .releaseInstance = releaseInstance,
     .getNumInputs = getNumInputs,
     .getNumOutputs = getNumOutputs,
-    .getNumParameters = getNumParameters,
-    .getParameterId = getParameterId,
-    .getParameterName = getParameterName,
+    .getParamCount = getParamCount,
+    .getParamInfo = getParamInfo,
+    .getParamValue = getParamValue,
     .process = process,
-    .releaseInstance = releaseInstance,
 };
 
-const UnitPlugin * unit_entry(const UnitHostApi * hostApi) {
+const UnitPlugin * drums_plugin(const UnitHostApi * hostApi) {
     api = hostApi;
     if (!UNIT_HOST_HAS(api, readDirectory)) {
         api->log("Drums: this firmware has no file access for units; update the firmware");

@@ -34,8 +34,6 @@
  */
 #include <unit_abi.h>
 
-UNIT_DECLARE("YAFR");
-
 #define MAX_INSTANCES           2
 #define NUM_ALLPASS             8
 #define NUM_INPUT_ALLPASS       4       // the first four diffuse the input, the rest the output
@@ -45,7 +43,8 @@ UNIT_DECLARE("YAFR");
 
 #define EARLY_SIZE              2048    // power of two > longest early tap + STEREO_SPREAD
 #define PREDELAY_SIZE           4096    // power of two > MAX_PREDELAY
-#define MAX_PREDELAY            2400    // 50 ms
+#define MAX_PREDELAY_MS         50
+#define MAX_PREDELAY            (MAX_PREDELAY_MS * 48)
 
 #define COMB_INPUT_GAIN         0.04F
 #define EARLY_GAIN              (0.6F / 4.285F)     // 0.6 of the original mix, over the sum of earlyGains
@@ -96,23 +95,13 @@ struct Instance {
     int predelayIndex;
     int predelayLength;
 
-    float roomSize, dampening, wetLevel, dryLevel, width, preDelay;
+    float roomSize, dampening, wetLevel, dryLevel, width, preDelay;   // the parameters; preDelay in ms
     float damp;                         // comb lowpass coefficient
     float wet1, wet2, dry;              // current output gains, ramped towards the targets
 };
 
 static struct Instance instances[MAX_INSTANCES];
 static const UnitHostApi * api;
-
-static void copyString(char * dest, const char * src, size_t maxLength) {
-    size_t i = 0;
-    for (; src[i] && i + 1 < maxLength; i++) {
-        dest[i] = src[i];
-    }
-    if (maxLength) {
-        dest[i] = 0;
-    }
-}
 
 // Decaying feedback ends in denormals, which the VFP handles very slowly.
 static inline float flushDenormal(float x) {
@@ -177,22 +166,25 @@ static void updateRoomSize(struct Instance * inst) {
     }
 }
 
-static void setParameter(struct Instance * inst, uint16_t id, float value) {
+enum { PARAM_ROOM_SIZE = 1001, PARAM_DAMPENING, PARAM_WET, PARAM_DRY, PARAM_WIDTH, PARAM_PREDELAY };
+
+// The firmware keeps values in range
+static void setParameter(struct Instance * inst, uint32_t id, float value) {
     switch (id) {
-    case 1001:
+    case PARAM_ROOM_SIZE:
         inst->roomSize = value;
         updateRoomSize(inst);
         break;
-    case 1002:
+    case PARAM_DAMPENING:
         inst->dampening = value;
         inst->damp = 0.4F * value;
         break;
-    case 1003: inst->wetLevel = value; break;
-    case 1004: inst->dryLevel = value; break;
-    case 1005: inst->width = value; break;
-    case 1006:
+    case PARAM_WET: inst->wetLevel = value; break;
+    case PARAM_DRY: inst->dryLevel = value; break;
+    case PARAM_WIDTH: inst->width = value; break;
+    case PARAM_PREDELAY:
         inst->preDelay = value;
-        inst->predelayLength = (int)(value * MAX_PREDELAY);
+        inst->predelayLength = (int)(value * (MAX_PREDELAY / MAX_PREDELAY_MS));
         break;
     }
 }
@@ -201,13 +193,13 @@ static void process(void * instance, UnitProcessHost * host,
                     size_t nrInChannels, float ** inSamples,
                     size_t nrOutChannels, float ** outSamples,
                     size_t frameCount,
-                    UnitParameterChange * parameterChanges, size_t parameterChangeCount) {
+                    const UnitParamEvent * paramEvents, size_t paramEventCount) {
     struct Instance * inst = instance;
     if (!inst || nrInChannels < 1 || nrOutChannels < 2 || frameCount == 0) {
         return;
     }
-    for (size_t c = 0; c < parameterChangeCount; c++) {
-        setParameter(inst, parameterChanges[c].parameterId, parameterChanges[c].midiValue / 127.0F);
+    for (size_t c = 0; c < paramEventCount; c++) {
+        setParameter(inst, paramEvents[c].id, paramEvents[c].value);
     }
 
     // Freeverb-style width: wet1 to its own side, wet2 crossed over.
@@ -326,15 +318,16 @@ static int initInstance(struct Instance * inst) {
 // Plugin interface
 // =============================================================================================
 
-static const uint16_t parameterIds[] = { 1001, 1002, 1003, 1004, 1005, 1006 };
-static const char * const parameterNames[] = {
-    "roomsize", "dampening", "wetlevel", "drylevel", "width", "predelay",
+// The defaults are initInstance()'s
+static const UnitParamInfo parameters[] = {
+    { PARAM_ROOM_SIZE, UNIT_PARAM_IS_AUTOMATABLE, "roomsize", "tank", 0, 1, 0.5 },
+    { PARAM_DAMPENING, UNIT_PARAM_IS_AUTOMATABLE, "dampening", "tank", 0, 1, 0.5 },
+    { PARAM_WET, UNIT_PARAM_IS_AUTOMATABLE, "wetlevel", "mix", 0, 1, 0.3 },
+    { PARAM_DRY, UNIT_PARAM_IS_AUTOMATABLE, "drylevel", "mix", 0, 1, 0.7 },
+    { PARAM_WIDTH, UNIT_PARAM_IS_AUTOMATABLE, "width", "mix", 0, 1, 1 },
+    { PARAM_PREDELAY, UNIT_PARAM_IS_AUTOMATABLE, "predelay", "tank", 0, MAX_PREDELAY_MS, 0 },
 };
-#define NUM_PARAMETERS (sizeof(parameterIds) / sizeof(parameterIds[0]))
-
-static void getName(char * name, size_t maxLength) {
-    copyString(name, __unit_header.name, maxLength);
-}
+#define NUM_PARAMETERS (sizeof(parameters) / sizeof(parameters[0]))
 
 static void * createInstance(void) {
     if (!UNIT_HOST_HAS(api, allocate)) {
@@ -359,32 +352,69 @@ static void releaseInstance(void * instance) {
     ((struct Instance *)instance)->active = 0;
 }
 
-static uint8_t getNumInputs(void) { return 1; }
-static uint8_t getNumOutputs(void) { return 2; }
-static uint8_t getNumParameters(void) { return NUM_PARAMETERS; }
+static uint32_t getNumInputs(void) { return 1; }
+static uint32_t getNumOutputs(void) { return 2; }
+static uint32_t getParamCount(void) { return NUM_PARAMETERS; }
 
-static uint16_t getParameterId(size_t index) {
-    return index < NUM_PARAMETERS ? parameterIds[index] : 0;
+static int getParamInfo(uint32_t index, UnitParamInfo * info) {
+    if (index >= NUM_PARAMETERS) {
+        return 0;
+    }
+    *info = parameters[index];
+    return 1;
 }
 
-static void getParameterName(size_t index, char * name, size_t maxLength) {
-    copyString(name, index < NUM_PARAMETERS ? parameterNames[index] : "", maxLength);
+static int getParamValue(void * instance, uint32_t id, double * value) {
+    struct Instance * inst = instance;
+    switch (id) {
+    case PARAM_ROOM_SIZE: *value = inst->roomSize; return 1;
+    case PARAM_DAMPENING: *value = inst->dampening; return 1;
+    case PARAM_WET: *value = inst->wetLevel; return 1;
+    case PARAM_DRY: *value = inst->dryLevel; return 1;
+    case PARAM_WIDTH: *value = inst->width; return 1;
+    case PARAM_PREDELAY: *value = inst->preDelay; return 1;
+    }
+    return 0;
+}
+
+// "12.5 ms": tenths, without a C library
+static int paramValueToText(uint32_t id, double value, char * text, uint32_t size) {
+    if (id != PARAM_PREDELAY || size < 10 || value < 0 || value > MAX_PREDELAY_MS) {
+        return 0;
+    }
+    int tenths = (int)(value * 10 + 0.5);
+    char * p = text;
+    if (tenths >= 100) {
+        *p++ = '0' + tenths / 100;
+    }
+    *p++ = '0' + tenths / 10 % 10;
+    *p++ = '.';
+    *p++ = '0' + tenths % 10;
+    *p++ = ' ';
+    *p++ = 'm';
+    *p++ = 's';
+    *p = 0;
+    return 1;
 }
 
 static const UnitPlugin plugin = {
-    .vendorId = 0xAAAA5679,
-    .getName = getName,
+    .size = sizeof(UnitPlugin),
+    .name = "YAFR",
+    .vendor = "metalhead",
+    .version = "1.1",
+    .description = "Plate-style reverb, mono in, stereo out",
     .createInstance = createInstance,
+    .releaseInstance = releaseInstance,
     .getNumInputs = getNumInputs,
     .getNumOutputs = getNumOutputs,
-    .getNumParameters = getNumParameters,
-    .getParameterId = getParameterId,
-    .getParameterName = getParameterName,
+    .getParamCount = getParamCount,
+    .getParamInfo = getParamInfo,
+    .getParamValue = getParamValue,
+    .paramValueToText = paramValueToText,
     .process = process,
-    .releaseInstance = releaseInstance,
 };
 
-const UnitPlugin * unit_entry(const UnitHostApi * hostApi) {
+const UnitPlugin * yafr_plugin(const UnitHostApi * hostApi) {
     api = hostApi;
     return &plugin;
 }

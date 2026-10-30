@@ -18,8 +18,6 @@
  */
 #include <unit_abi.h>
 
-UNIT_DECLARE("VUMeter");
-
 #define NUM_COLUMNS             8
 #define NUM_ROWS                8
 #define NUM_PADS                (NUM_COLUMNS * NUM_ROWS)
@@ -62,17 +60,6 @@ struct Instance {
 static struct Instance instances[MAX_INSTANCES];
 static const UnitHostApi * api;
 
-static void getName(char * name, size_t maxLength) {
-    const char * s = __unit_header.name;
-    size_t i = 0;
-    for (; s[i] && i + 1 < maxLength; i++) {
-        name[i] = s[i];
-    }
-    if (maxLength) {
-        name[i] = 0;
-    }
-}
-
 static void * createInstance(void) {
     for (int i = 0; i < MAX_INSTANCES; i++) {
         struct Instance * inst = &instances[i];
@@ -89,11 +76,11 @@ static void releaseInstance(void * instance) {
     ((struct Instance *)instance)->active = 0;
 }
 
-static uint8_t getNumInputs(void) { return NUM_COLUMNS; }
-static uint8_t getNumOutputs(void) { return 0; }
-static uint8_t getNumParameters(void) { return 0; }
-static uint16_t getParameterId(size_t index) { return 0; }
-static void getParameterName(size_t index, char * name, size_t maxLength) { if (maxLength) name[0] = 0; }
+static uint32_t getNumInputs(void) { return NUM_COLUMNS; }
+static uint32_t getNumOutputs(void) { return 0; }
+static uint32_t getParamCount(void) { return 0; }
+static int getParamInfo(uint32_t index, UnitParamInfo * info) { return 0; }
+static int getParamValue(void * instance, uint32_t id, double * value) { return 0; }
 
 static void send(UnitProcessHost * host, uint8_t cin, uint8_t b0, uint8_t b1, uint8_t b2) {
     host->sendMIDIEvent(host->hostData, (UnitMidiPacket) { cin, b0, b1, b2 });
@@ -122,7 +109,7 @@ static void process(void * instance, UnitProcessHost * host,
                     size_t nrInChannels, float ** inSamples,
                     size_t nrOutChannels, float ** outSamples,
                     size_t frameCount,
-                    UnitParameterChange * parameterChanges, size_t parameterChangeCount) {
+                    const UnitParamEvent * paramEvents, size_t paramEventCount) {
     struct Instance * inst = instance;
     if (!inst) {
         return;
@@ -181,19 +168,22 @@ static void process(void * instance, UnitProcessHost * host,
 }
 
 static const UnitPlugin plugin = {
-    .vendorId = 0,
-    .getName = getName,
+    .size = sizeof(UnitPlugin),
+    .name = "VUMeter",
+    .vendor = "metalhead",
+    .version = "1.0",
+    .description = "Level meters for eight inputs on a Launchpad Mini MK3",
     .createInstance = createInstance,
+    .releaseInstance = releaseInstance,
     .getNumInputs = getNumInputs,
     .getNumOutputs = getNumOutputs,
-    .getNumParameters = getNumParameters,
-    .getParameterId = getParameterId,
-    .getParameterName = getParameterName,
+    .getParamCount = getParamCount,
+    .getParamInfo = getParamInfo,
+    .getParamValue = getParamValue,
     .process = process,
-    .releaseInstance = releaseInstance,
 };
 
-const UnitPlugin * unit_entry(const UnitHostApi * hostApi) {
+const UnitPlugin * vumeter_plugin(const UnitHostApi * hostApi) {
     api = hostApi;
     api->log("VUMeter unit ready (%d inputs)", NUM_COLUMNS);
     return &plugin;
