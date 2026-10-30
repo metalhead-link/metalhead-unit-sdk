@@ -15,7 +15,10 @@ if (NOT DEFINED CMAKE_OSX_ARCHITECTURES)
     set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "Universal: DAWs running under Rosetta load them too")
 endif()
 
-project(metalhead-unit-plugins VERSION 1.0 LANGUAGES C CXX)
+# C++17 for the AudioUnit SDK; Objective-C++ for clap-wrapper's AUv2 code
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_OBJCXX_STANDARD 17)
+project(metalhead-unit-plugins VERSION 1.0 LANGUAGES C CXX OBJC OBJCXX)
 
 if (NOT APPLE)
     message(FATAL_ERROR "unitclap.c logs with os_log: macOS only for now")
