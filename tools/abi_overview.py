@@ -4,7 +4,7 @@
 Structure layouts (offsets, sizes) are taken from the ARM compiler, not written down by hand,
 so the document stays correct when unit_abi.h changes. Needs reportlab (pip install reportlab).
 
-    python3 ccs/units/tools/abi_overview.py [output.pdf]
+    python3 tools/abi_overview.py [output.pdf]
 """
 import collections
 import datetime
@@ -426,7 +426,7 @@ def build(out):
           f'used in {code("[units]")} like the built-in ones. Plugins and parameters follow CLAP: a factory, a plugin '
           'descriptor, parameter infos with plain value ranges, and parameter events. This document summarises the '
           f'binary interface: what a unit file contains, how it is loaded, which functions run where, and the exact '
-          f'layout of every structure. The source of truth is {code("ccs/units/include/unit_abi.h")}; offsets and '
+          f'layout of every structure. The source of truth is {code("include/unit_abi.h")}; offsets and '
           'sizes below come from the ARM compiler (BeagleBone Black; on the Raspberry Pi 5 pointers are 8 bytes).'),
         Spacer(1, 3 * mm),
     ]
@@ -585,7 +585,7 @@ def build(out):
         canvas.line(20 * mm, 14 * mm, A4[0] - 20 * mm, 14 * mm)
         canvas.setFont('Helvetica', 7.5)
         canvas.setFillColor(MUTED)
-        canvas.drawString(20 * mm, 9.5 * mm, f'Metalhead unit ABI {abi}  ·  ccs/units/include/unit_abi.h')
+        canvas.drawString(20 * mm, 9.5 * mm, f'Metalhead unit ABI {abi}  ·  include/unit_abi.h (metalhead-unit-sdk)')
         canvas.drawRightString(A4[0] - 20 * mm, 9.5 * mm, f'{doc.page}')
         canvas.setFillColor(ACCENT)
         canvas.rect(0, A4[1] - 4, A4[0], 4, stroke=0, fill=1)

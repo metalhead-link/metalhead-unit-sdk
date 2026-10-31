@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Convert a unit ELF (linked with unit.ld, -pie) into a loadable .unt file.
 
-The .unt layout is described in ccs/units/include/unit_abi.h:
+The .unt layout is described in include/unit_abi.h:
     UnitFileHeader (64 bytes) | image | relocation offsets (uint32 each)
 
 32-bit ARM (BeagleBone Black) and 64-bit ARM (Raspberry Pi 5) units; the file's machine

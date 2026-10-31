@@ -25,14 +25,14 @@
 UNITS_DIR := $(patsubst %/,%,$(dir $(lastword $(MAKEFILE_LIST))))
 
 # BeagleBone Black: the same toolchain and libgcc variant as the firmware (ARM, not Thumb;
-# see LD_OPTS in wormhole/Makefile)
+# see LD_OPTS in beagle's ccs/wormhole/Makefile)
 CROSSPATH ?= /Applications/ARM/bin
 CC_arm32 := $(CROSSPATH)/arm-none-eabi-gcc
 OBJDUMP_arm32 := $(CROSSPATH)/arm-none-eabi-objdump
 LIBGCC_arm32 ?= /Applications/ARM/lib/gcc/arm-none-eabi/14.3.1/arm/v5te/hard/libgcc.a
 CFLAGS_arm32 := -mcpu=cortex-a8 -mfpu=neon -mfloat-abi=hard -marm
 
-# Raspberry Pi 5: the same toolchain as rpi5/metalhead
+# Raspberry Pi 5: the same toolchain as beagle's rpi5/metalhead
 CROSSPATH_AARCH64 ?= /Applications/ArmGNUToolchain/15.3.rel2/aarch64-none-elf/bin
 CC_aarch64 := $(CROSSPATH_AARCH64)/aarch64-none-elf-gcc
 OBJDUMP_aarch64 := $(CROSSPATH_AARCH64)/aarch64-none-elf-objdump
@@ -95,7 +95,7 @@ endef
 $(foreach m,$(MACHINES),$(foreach s,$(call machine_srcs,$(m)) $(BUILD)/$(m)/bundle.c,$(eval $(call SOURCE_RULE,$(m),$(s)))))
 
 # bundle.c of each machine (and of the host test), with UNIT_BUNDLE for its plugins. The plugin
-# list can change without a file changing (`make ONLY=...` in mutable/), so it's generated every
+# list can change without a file changing (`make ONLY=...` in metalhead-mutable-units), so it's generated every
 # time but only replaced when it differs: an unchanged one doesn't rebuild the unit.
 $(BUILD)/%/bundle.c: FORCE
 	@mkdir -p $(dir $@)

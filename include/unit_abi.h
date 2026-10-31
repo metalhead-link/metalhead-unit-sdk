@@ -2,7 +2,7 @@
  * unit_abi.h — binary interface between the metalhead firmware and loadable units.
  *
  * A unit file is a bundle of audio/MIDI plugins built separately from the firmware (see
- * ccs/units/README.md) and loaded at runtime from /units/<name>.unt on the SD card. This
+ * README.md of metalhead-unit-sdk) and loaded at runtime from /units/<name>.unt on the SD card. This
  * header is the whole contract: a unit includes nothing from the firmware, and the firmware
  * checks at compile time (unitloader.c) that these structures match its own plugin structures.
  *

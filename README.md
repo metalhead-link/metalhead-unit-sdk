@@ -1,3 +1,10 @@
+# Metalhead unit SDK
+
+Everything needed to build plugins for the metalhead firmware outside it: the ABI header, the
+build rules, the tools, and example units. The firmware (the `beagle` repository) includes this
+repository as a submodule at `ccs/units` and compiles its loader against `include/unit_abi.h`,
+so an ABI change is made here and the submodule moved forward in `beagle`.
+
 # Loadable units
 
 A **unit** is a file of audio/MIDI plugins built separately from the firmware, on the laptop,
@@ -11,7 +18,7 @@ vu VUMeter
 ```
 
 ```sh
-cd ccs/units/vumeter && make        # → build/arm32/vumeter.unt   (BeagleBone Black)
+cd vumeter && make                  # → build/arm32/vumeter.unt   (BeagleBone Black)
                                     #   build/aarch64/vumeter.unt (Raspberry Pi 5)
 make test                           # runs the plugins on the Mac (tools/unittest.c)
 ```
@@ -38,8 +45,11 @@ upload either the bundle or the separate files, not both (a plugin name can only
 | `yafr/` | example: plate-style reverb, mono in / stereo out (port of the old built-in YAFR plugin) |
 | `clipgrid/` | Ableton-style clip launcher on a Launchpad Mini MK3: 8 tracks × 7 clips, after-the-fact capture; reads the Launchpad through `midiIn` (config in `clipgrid/clipgrid.txt`) |
 | `stock/` | all four examples in one unit file |
-| `mutable/` | Mutable Instruments modules (Plaits, Rings, Clouds, ...) in one unit file, C++; the heavy ones for the Pi only |
-| `../wormhole/src/unitloader.c` | the firmware side |
+| `tools/metalhead_serial.py` | finds the device's USB serial port and talks to its console (macOS) |
+| beagle's `ccs/wormhole/src/unitloader.c` | the firmware side |
+
+Mutable Instruments modules (Plaits, Rings, Clouds, ...) are a C++ bundle in their own
+repository, `metalhead-mutable-units` (see *Units in their own repository* below).
 
 ## ABI (version 2)
 
@@ -181,7 +191,7 @@ C++ sources (`.cc`, `.cpp`) are built with the same flags minus `-ffreestanding`
 headers need it off), and with `-fno-rtti -fno-exceptions -fno-threadsafe-statics
 -fno-use-cxa-atexit`: no runtime for any of those. Nothing runs static constructors, so mkunit.py
 refuses a unit with a non-empty `.init_array`: set up globals in `unit_entry()` or
-`createInstance()`. See `mutable/` for a C++ bundle.
+`createInstance()`. See `metalhead-mutable-units` for a C++ bundle.
 
 ### File format (`.unt`)
 
@@ -257,7 +267,7 @@ include ../unit.mk
 ```
 
 A plugin for one board only goes in `PLUGINS_arm32` or `PLUGINS_aarch64`, with its sources in
-`SRCS_arm32` or `SRCS_aarch64` (`mutable/` keeps the heavy modules off the BeagleBone this way).
+`SRCS_arm32` or `SRCS_aarch64` (`metalhead-mutable-units` keeps the heavy modules off the BeagleBone this way).
 `make test` runs the plugins of both lists.
 
 `make disasm-arm32` shows the code with relocations. `make test` builds the sources for the Mac
@@ -266,7 +276,25 @@ checks the factory, the descriptors and parameters, sets every parameter to its 
 and default and expects `getParamValue` to report them back, presses the triggers, and releases
 and recreates an instance (`TEST_ARGS="-v -r <folder>"` lists the parameters and serves files
 from a folder; `-w <folder>` renders each plugin to a WAV there, playing notes into `midiIn` and a
-plucked sawtooth into its inputs, in blocks of 1 to 64 frames). `ccs/make-all.sh` builds every unit directory listed in it.
+plucked sawtooth into its inputs, in blocks of 1 to 64 frames). beagle's `ccs/make-all.sh` builds every unit directory listed in it.
+
+### Units in their own repository
+
+A unit doesn't have to live in this SDK: its Makefile only has to include `unit.mk` from a
+checkout of it (`unit.mk` finds `include/`, `unit.ld` and `tools/` next to itself), for example
+with the SDK as a submodule:
+
+```make
+SDK ?= sdk                      # git submodule add <metalhead-unit-sdk url> sdk
+NAME := mine
+BUNDLE := Mine
+PLUGINS := mine_plugin
+SRCS := mine.c
+include $(SDK)/unit.mk
+```
+
+`tools/upload_units.py --dir <path>` (or `METALHEAD_UNIT_DIRS=<path>:<path>`) builds and uploads
+such units together with the SDK's; the path is the unit directory or a directory of them.
 
 ## Upload protocol
 
@@ -274,7 +302,7 @@ The web UI sends `unitput <bytes>`, the file as base64 lines (768 characters eac
 `unitend`. The device validates and saves the file, then loads it if no unit with that name is
 loaded yet. Its reply is `@unitput ok <name> loaded|unchanged|reboot` or
 `@unitput error <reason>`. `unitls` lists `/units` with the plugins of each loaded file, and
-`unitrm <name>` deletes a file. See `ccs/wormhole/src/configconsole.c`.
+`unitrm <name>` deletes a file. See beagle's `ccs/wormhole/src/configconsole.c`.
 
 ## Limits (for now)
 
