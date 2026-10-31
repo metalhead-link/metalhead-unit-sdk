@@ -24,6 +24,7 @@ import subprocess
 import sys
 
 UNITS = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+sys.path.insert(0, os.path.join(UNITS, 'tools'))
 from metalhead_serial import LINE, answer, command, open_port     # noqa: E402
 
 DEFAULT = ['Stock', 'Mutable']
