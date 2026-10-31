@@ -7,7 +7,7 @@ translates it to CLAP, and [clap-wrapper](https://github.com/free-audio/clap-wra
 that CLAP into a VST3 and an AUv2.
 
 ```sh
-cd ccs/units/daw
+cd daw
 make UNIT=yafr              # → build/yafr/plugins/metalhead YAFR.{clap,vst3,component}
 make install UNIT=stock     # all four examples, copied to ~/Library/Audio/Plug-Ins/{CLAP,VST3,Components}
 ```

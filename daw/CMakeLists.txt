@@ -2,7 +2,7 @@
 #
 #   cmake -S . -B build/yafr -G Ninja -DUNIT=yafr && cmake --build build/yafr
 #
-# UNIT is a unit directory (relative to ccs/units, or absolute); its Makefile says what to
+# UNIT is a unit directory (relative to the SDK root, or absolute); its Makefile says what to
 # build, as for the device. The plugins land in build/<unit>/plugins. The Makefile here wraps
 # this. clap-wrapper and the CLAP, VST3 and AudioUnit SDKs are downloaded at the first configure.
 
