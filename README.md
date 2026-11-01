@@ -1,9 +1,10 @@
 # Metalhead unit SDK
 
 Everything needed to build plugins for the metalhead firmware outside it: the ABI header, the
-build rules, the tools, and example units. The firmware (the `beagle` repository) includes this
+build rules, the tools, and example units. The firmware,
+[`metalhead-firmware`](https://github.com/metalhead-link/metalhead-firmware), includes this
 repository as a submodule at `ccs/units` and compiles its loader against `include/unit_abi.h`,
-so an ABI change is made here and the submodule moved forward in `beagle`.
+so an ABI change is made here and the submodule moved forward in `metalhead-firmware`.
 
 # Loadable units
 
@@ -46,10 +47,10 @@ upload either the bundle or the separate files, not both (a plugin name can only
 | `clipgrid/` | Ableton-style clip launcher on a Launchpad Mini MK3: 8 tracks × 7 clips, after-the-fact capture; reads the Launchpad through `midiIn` (config in `clipgrid/clipgrid.txt`) |
 | `stock/` | all four examples in one unit file |
 | `tools/metalhead_serial.py` | finds the device's USB serial port and talks to its console (macOS) |
-| beagle's `ccs/wormhole/src/unitloader.c` | the firmware side |
+| metalhead-firmware's `ccs/wormhole/src/unitloader.c` | the firmware side |
 
 Mutable Instruments modules (Plaits, Rings, Clouds, ...) are a C++ bundle in their own
-repository, `metalhead-mutable-units` (see *Units in their own repository* below).
+repository, [`metalhead-mutable-units`](https://github.com/metalhead-link/metalhead-mutable-units) (see *Units in their own repository* below).
 
 ## ABI (version 2)
 
@@ -276,7 +277,7 @@ checks the factory, the descriptors and parameters, sets every parameter to its 
 and default and expects `getParamValue` to report them back, presses the triggers, and releases
 and recreates an instance (`TEST_ARGS="-v -r <folder>"` lists the parameters and serves files
 from a folder; `-w <folder>` renders each plugin to a WAV there, playing notes into `midiIn` and a
-plucked sawtooth into its inputs, in blocks of 1 to 64 frames). beagle's `ccs/make-all.sh` builds every unit directory listed in it.
+plucked sawtooth into its inputs, in blocks of 1 to 64 frames). metalhead-firmware's `ccs/make-all.sh` builds every unit directory listed in it.
 
 ### Units in their own repository
 
@@ -302,7 +303,7 @@ The web UI sends `unitput <bytes>`, the file as base64 lines (768 characters eac
 `unitend`. The device validates and saves the file, then loads it if no unit with that name is
 loaded yet. Its reply is `@unitput ok <name> loaded|unchanged|reboot` or
 `@unitput error <reason>`. `unitls` lists `/units` with the plugins of each loaded file, and
-`unitrm <name>` deletes a file. See beagle's `ccs/wormhole/src/configconsole.c`.
+`unitrm <name>` deletes a file. See metalhead-firmware's `ccs/wormhole/src/configconsole.c`.
 
 ## Limits (for now)
 

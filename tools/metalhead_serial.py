@@ -1,5 +1,5 @@
 """Talking to a metalhead device over its USB serial port (macOS): find the port, send console
-lines. A copy of the helpers in beagle's rpi5/tools/upload_image.py, so the SDK stands alone.
+lines. A copy of the helpers in metalhead-firmware's rpi5/tools/upload_image.py, so the SDK stands alone.
 
 The web UI must not have the port open at the same time.
 """
