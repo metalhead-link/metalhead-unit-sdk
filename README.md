@@ -28,6 +28,11 @@ A unit binary is built for one board: upload the one for yours. The other board 
 ("built for 32-bit ARM (BeagleBone Black), this is 64-bit ARM (Raspberry Pi 5)") instead of
 running it. `make arm32` or `make aarch64` builds just one.
 
+Both boards are supported, and a unit is meant to work on both. The BeagleBone is much slower (a
+1 GHz Cortex-A8 with single-precision NEON, against the Pi's 2.4 GHz Cortex-A76), so check a new
+unit's CPU use per USB microframe in the live view on a BBB before releasing it. A plugin too heavy
+for the BBB goes on the Pi's list only (see *Writing a unit*); say so in the unit's README.
+
 One file can hold several plugins (a **bundle**, like a CLAP file): `stock/` builds all the
 examples below into one `Stock.unt`. Each example directory also builds its plugin on its own;
 upload either the bundle or the separate files, not both (a plugin name can only be loaded once).
@@ -224,6 +229,9 @@ A file whose name is already loaded isn't loaded twice: replacing a unit takes a
 - Changing or reordering any structure, a calling convention, or the meaning of a field: bump
   `UNIT_ABI_VERSION`, and rebuild the units. The loader refuses mismatched units, and the web UI
   checks the version before uploading.
+- Both boards share one ABI (the loader is `ccs/wormhole/src/unitloader.c`, compiled for each).
+  A new version ships in a firmware image for the BBB and one for the Pi at the same time; a board
+  left behind refuses every unit built after it.
 
 ## Writing a unit
 
