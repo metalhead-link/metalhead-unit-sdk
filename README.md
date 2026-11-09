@@ -45,6 +45,8 @@ upload either the bundle or the separate files, not both (a plugin name can only
 | `tools/mkunit.py` | ELF → `.unt` converter |
 | `tools/upload_units.py` | rebuilds every unit and uploads them over the USB serial port (`--bbb`, `--reboot`, unit names; `-h`) |
 | `tools/unittest.c` | `make test`: the plugins compiled for the Mac and exercised through the ABI |
+| `tools/describe.c` | `make describe`: the plugins and parameters as JSON (`build/describe.json`), for a store and faceplate demos |
+| `doc/faceplates.md` | a plugin's own user interface (HTML/JS) in configui and the store: the sandbox and the `metalhead` API |
 | `doc/unit-abi-overview.pdf` | printable ABI overview; regenerate with `tools/abi_overview.py` (needs reportlab) |
 | `vumeter/` | example: level meters on a Launchpad Mini MK3 |
 | `drums/` | example: drum sampler playing WAV files from `/samples/drums` (built-in kit as fallback) |
@@ -279,13 +281,21 @@ A plugin for one board only goes in `PLUGINS_arm32` or `PLUGINS_aarch64`, with i
 `SRCS_arm32` or `SRCS_aarch64` (`metalhead-mutable-units` keeps the heavy modules off the BeagleBone this way).
 `make test` runs the plugins of both lists.
 
-`make disasm-arm32` shows the code with relocations. `make test` builds the sources for the Mac
+`make disasm-arm32` shows the code with relocations. `make test` builds the sources for the Mac (on Linux: `make test HOST_CC=gcc HOST_CXX=g++`)
 with the address and undefined-behaviour sanitizers and runs `tools/unittest.c` on them: it
 checks the factory, the descriptors and parameters, sets every parameter to its minimum, maximum
 and default and expects `getParamValue` to report them back, presses the triggers, and releases
 and recreates an instance (`TEST_ARGS="-v -r <folder>"` lists the parameters and serves files
 from a folder; `-w <folder>` renders each plugin to a WAV there, playing notes into `midiIn` and a
 plucked sawtooth into its inputs, in blocks of 1 to 64 frames). metalhead-firmware's `ccs/make-all.sh` builds every unit directory listed in it.
+
+### Faceplates
+
+A plugin can bring its own user interface: a responsive HTML page that configui shows instead of
+its generic faders, sandboxed, talking to the unit only through a small API. See
+[doc/faceplates.md](doc/faceplates.md); `metalhead-essentials` has six, and a kit of controls.
+`make describe` prints the plugins and their parameters as JSON for it, with each parameter's
+values as the plugin writes them (`texts`).
 
 ### Units in their own repository
 

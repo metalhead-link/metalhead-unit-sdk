@@ -141,7 +141,7 @@ $(call obj,host,$(1)): $(1) $(UNITS_DIR)/include/unit_abi.h
 	@mkdir -p $$(dir $$@)
 	$(if $(filter %.c,$(1)),$(HOST_CC) $(HOST_FLAGS) -std=gnu11 $(EXTRA_CFLAGS),$(HOST_CXX) $(HOST_FLAGS) -std=gnu++14 $(EXTRA_CXXFLAGS)) -c -o $$@ $$<
 endef
-$(foreach s,$(HOST_SRCS) $(BUILD)/host/bundle.c $(UNITS_DIR)/tools/unittest.c,$(eval $(call HOST_SOURCE_RULE,$(s))))
+$(foreach s,$(HOST_SRCS) $(BUILD)/host/bundle.c $(UNITS_DIR)/tools/unittest.c $(UNITS_DIR)/tools/describe.c,$(eval $(call HOST_SOURCE_RULE,$(s))))
 
 $(BUILD)/host/unittest: $(foreach s,$(HOST_SRCS) $(BUILD)/host/bundle.c $(UNITS_DIR)/tools/unittest.c,$(call obj,host,$(s)))
 	$(HOST_CXX) $(HOST_FLAGS) -o $@ $^
@@ -149,7 +149,17 @@ $(BUILD)/host/unittest: $(foreach s,$(HOST_SRCS) $(BUILD)/host/bundle.c $(UNITS_
 test: $(BUILD)/host/unittest
 	$(BUILD)/host/unittest $(TEST_ARGS)
 
+# `make describe`: the plugins and their parameters as JSON (tools/describe.c), for a store or a
+# faceplate preview: $(BUILD)/describe.json.
+$(BUILD)/host/describe: $(foreach s,$(HOST_SRCS) $(BUILD)/host/bundle.c $(UNITS_DIR)/tools/describe.c,$(call obj,host,$(s)))
+	$(HOST_CXX) $(HOST_FLAGS) -o $@ $^
+
+$(BUILD)/describe.json: $(BUILD)/host/describe
+	$< > $@
+
+describe: $(BUILD)/describe.json
+
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all clean test FORCE $(MACHINES) $(foreach m,$(MACHINES),disasm-$(m))
+.PHONY: all clean test describe FORCE $(MACHINES) $(foreach m,$(MACHINES),disasm-$(m))
