@@ -298,6 +298,9 @@ typedef struct UnitImageHeader {
 //   relocations         relocCount little-endian uint32 offsets into the image; the loader
 //                       adds the load address to the pointer-sized word at each offset
 //                       (32 bits for UNIT_MACHINE_ARM32, 64 bits for UNIT_MACHINE_AARCH64)
+//   resources           optional, to the end of the file: a UnitResourceTable (below). Never
+//                       loaded into memory; the firmware reads them from the file when asked.
+//                       Firmware from before resources refuses a file that has them.
 //
 // A unit is built for one machine; the loader refuses the other's (the ABI structures hold
 // pointers, so their layout differs). unit.mk builds both.
@@ -326,5 +329,37 @@ typedef struct UnitFileHeader {
     uint32_t machine;           // UNIT_MACHINE_*; 0 in files from before there was a choice
     char name[UNIT_NAME_LENGTH];
 } UnitFileHeader;
+
+// --- Resources (.unt) ---------------------------------------------------------------------
+//
+// What a unit file brings besides its code, after the relocations:
+//
+//   UnitResourceTable   8 bytes
+//   UnitResourceEntry   48 bytes each, count of them
+//   data                each entry's bytes, at its offset from the start of the table
+//
+// Every entry lies inside the file. Kinds the firmware doesn't know are kept and ignored.
+// tools/unitfile.py lists, adds and extracts them; mkunit.py --faceplate adds faceplates.
+
+#define UNIT_RESOURCES_MAGIC    0x53455255u     // "URES"
+#define UNIT_RESOURCES_MAX      64              // entries in one file
+#define UNIT_RESOURCE_MAX_SIZE  (256 * 1024)    // bytes in one entry
+
+// A plugin's faceplate (doc/faceplates.md): its HTML page, gzip compressed (RFC 1952). The
+// firmware hands it out as it is (console `faceplate`), and the page unpacks it.
+#define UNIT_RESOURCE_FACEPLATE 1
+
+typedef struct UnitResourceTable {
+    uint32_t magic;             // UNIT_RESOURCES_MAGIC
+    uint32_t count;
+} UnitResourceTable;
+
+typedef struct UnitResourceEntry {
+    uint32_t kind;              // UNIT_RESOURCE_*
+    uint32_t offset;            // from the start of the UnitResourceTable
+    uint32_t size;
+    uint32_t reserved;          // 0
+    char plugin[UNIT_NAME_LENGTH];  // the plugin of this file it belongs to, NUL terminated
+} UnitResourceEntry;
 
 #endif /* UNIT_ABI_H_ */

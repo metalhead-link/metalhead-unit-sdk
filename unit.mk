@@ -15,6 +15,7 @@
 # Plugins for one board only (too heavy for the BeagleBone, say) go in PLUGINS_arm32 or
 # PLUGINS_aarch64, with their sources in SRCS_arm32 or SRCS_aarch64; they come after PLUGINS
 # in the bundle. LIBM := 1 links newlib's libm (sinf, powf, ...; see common/unitrt.c).
+# FACEPLATES := Plugin=file.html ... puts plugins' faceplates into the file (doc/faceplates.md).
 #
 # Output, one per board (upload the one for yours with the web UI, or copy it to /units/
 # on the SD card):
@@ -119,8 +120,9 @@ $(BUILD)/$(1)/$(NAME).elf: $(foreach s,$(call machine_srcs,$(1)) $(BUILD)/$(1)/b
 		$(BUILD)/$(1)/unitrt.o $(UNITS_DIR)/unit.ld
 	$(CC_$(1)) $(CFLAGS_$(1)) $(CFLAGS) $(LDFLAGS) -o $$@ $$(filter %.o,$$^) $(if $(LIBM),$(LIBM_$(1))) $(LIBGCC_$(1))
 
-$(BUILD)/$(1)/$(NAME).unt: $(BUILD)/$(1)/$(NAME).elf $(UNITS_DIR)/tools/mkunit.py
-	python3 $(UNITS_DIR)/tools/mkunit.py $$< $$@
+$(BUILD)/$(1)/$(NAME).unt: $(BUILD)/$(1)/$(NAME).elf $(UNITS_DIR)/tools/mkunit.py $(UNITS_DIR)/tools/unitfile.py \
+		$(foreach f,$(FACEPLATES),$(lastword $(subst =, ,$(f))))
+	python3 $(UNITS_DIR)/tools/mkunit.py $(foreach f,$(FACEPLATES),--faceplate $(f)) $$< $$@
 
 disasm-$(1): $(BUILD)/$(1)/$(NAME).elf
 	$(OBJDUMP_$(1)) -d -r $$<

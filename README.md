@@ -42,7 +42,8 @@ upload either the bundle or the separate files, not both (a plugin name can only
 | `include/unit_abi.h` | the ABI — the only header a unit includes |
 | `unit.mk`, `unit.ld` | shared build rules and linker script |
 | `common/unitrt.c` | `memcpy`/`memset`/`memmove`/`memcmp` linked into every unit |
-| `tools/mkunit.py` | ELF → `.unt` converter |
+| `tools/mkunit.py` | ELF → `.unt` converter (`--faceplate Plugin=file.html`) |
+| `tools/unitfile.py` | a `.unt` file's resources: list, add, extract or strip its faceplates |
 | `tools/upload_units.py` | rebuilds every unit and uploads them over the USB serial port (`--bbb`, `--reboot`, unit names; `-h`) |
 | `tools/unittest.c` | `make test`: the plugins compiled for the Mac and exercised through the ABI |
 | `tools/describe.c` | `make describe`: the plugins and parameters as JSON (`build/describe.json`), for a store and faceplate demos |
@@ -208,15 +209,26 @@ UnitFileHeader   64 bytes  magic "UNT1", abiVersion, headerSize, imageSize, bssS
                            relocCount, entryOffset, crc32, machine, name[32]
 image            imageSize bytes, starts with UnitImageHeader ("UNIT", abiVersion, name)
 relocations      relocCount × uint32 offsets into the image
+resources        optional, to the end of the file: "URES", count, count × UnitResourceEntry
+                 (kind, offset, size, plugin[32]), then the data
 ```
 
-All little endian. The CRC-32 (`zlib.crc32`) covers everything after the file header. The name is
+All little endian. The CRC-32 (`zlib.crc32`) covers everything after the file header, resources
+included.
+
+**Resources** are what a file brings besides its code: today each plugin's faceplate, its HTML
+gzip compressed (`UNIT_RESOURCE_FACEPLATE`). They are never loaded into unit memory; the firmware
+reads one from the file on the SD card when configui asks for it (console `faceplate`), so a
+faceplate costs the device nothing while it plays. Firmware from before resources refuses a file
+that has them ("inconsistent sizes"): update the firmware first, or `tools/unitfile.py strip` the
+file. The name is
 the unit file's (`BUNDLE` in the Makefile): the device stores it as `/units/<name>.unt`. Its
 plugins have their own names. Names are `[A-Za-z0-9_]{1,31}`.
 
 ### What the loader checks
 
-Magic and header size, an exact ABI version match, consistent sizes, the CRC, the entry point,
+Magic and header size, an exact ABI version match, consistent sizes, the CRC, the resource table
+(every entry inside the file, at most 64, each at most 256 KB, a plugin name), the entry point,
 the image header against the file header, and that every relocation is in range. After calling
 `unit_entry` it checks that the factory, every plugin, their strings and their function pointers
 lie inside the unit's own image, and the parameters (above). A plugin whose name is already
@@ -294,6 +306,8 @@ plucked sawtooth into its inputs, in blocks of 1 to 64 frames). metalhead-firmwa
 A plugin can bring its own user interface: a responsive HTML page that configui shows instead of
 its generic faders, sandboxed, talking to the unit only through a small API. See
 [doc/faceplates.md](doc/faceplates.md); `metalhead-essentials` has six, and a kit of controls.
+A faceplate travels inside the unit file (`FACEPLATES := EQ=eq.html` in the Makefile), so the
+device has it wherever the unit goes, and configui shows it over USB with no internet.
 `make describe` prints the plugins and their parameters as JSON for it, with each parameter's
 values as the plugin writes them (`texts`).
 

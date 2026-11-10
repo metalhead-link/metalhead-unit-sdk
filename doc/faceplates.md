@@ -1,14 +1,34 @@
 # Faceplates
 
 A unit's plugin can have its own user interface: a **faceplate**, one HTML page with its CSS and
-JavaScript inline. configui shows it in place of the generic faders on its Parameters panel, on a
-phone, a tablet or a laptop, and metalhead.link's store runs it as a live demo. A faceplate is
+JavaScript inline. It travels inside the unit file, so wherever the unit is installed the device
+has its faceplate. configui shows it in place of the generic faders on its Parameters panel, on a
+phone, a tablet or a laptop, over USB as well as through metalhead.link, and metalhead.link's
+store runs it as a live demo. A faceplate is
 responsive (the frame is as wide as the panel it sits in; height is up to the faceplate), and
 it reaches the unit only through the `metalhead` object described here.
 
 `metalhead-essentials` has six faceplates and the kit they share (`faceplates/kit.js`: knobs,
 switches, selectors, meters, canvas displays), and `tools/build-store.py`, which checks and
 packages them. Start from one of those.
+
+## Where it comes from
+
+configui asks the device: console `faceplate <plugin> [offset]` reads the plugin's faceplate from
+its unit file on the SD card and prints it gzip compressed, as base64, 12 KB at a time:
+
+```
+@faceplate <plugin> <offset> <total bytes>
+@fp <base64>                        (up to 512 characters a line)
+...
+```
+
+or `@faceplate none <plugin>` when it has none (a built-in plugin, or a unit file without one),
+or `@faceplate error <message>`. configui fetches the pieces, unpacks them
+(`DecompressionStream('gzip')`, which also checks the gzip CRC) and caches them per plugin. That
+works the same over USB with no internet and through metalhead.link (`faceplate` is on the remote
+console's allowlist: it only reads). A unit installed before its file had faceplates gets the
+store's, when configui is served by metalhead.link.
 
 ## Where it runs
 
@@ -18,9 +38,10 @@ itself, runs its scripts, and gives them `window.metalhead`. So a faceplate:
 
 - has an **opaque origin**: no cookies, no `localStorage`/`IndexedDB` (they throw), no popups,
   forms, `alert()`, or navigating the page around it;
-- has **no network** at all (served by metalhead-connect, the frame's Content-Security-Policy is
-  `default-src 'none'` with inline scripts and styles, `data:`/`blob:` images, fonts and media):
-  put images in as `data:` URIs or draw them;
+- has **no network** at all (the frame's Content-Security-Policy is `default-src 'none'` with
+  inline scripts and styles, `data:`/`blob:` images, fonts and media; metalhead-connect sends it
+  as a header, and `unit-frame.html` carries it as a `<meta>` too for configui opened from a
+  file): put images in as `data:` URIs or draw them;
 - gets **only its own unit**: its parameters, their values and its levels. Not the device, the
   config, other units, the room or who is looking.
 
@@ -80,10 +101,19 @@ instead, and targets of 30 pixels or more. Double-tap is the touch equivalent of
 
 ## Packaging
 
-A faceplate is one file, `<Plugin>.html`, at most 256 KB with everything inlined. For the store,
-`tools/build-store.py` in metalhead-essentials inlines `kit.css`/`kit.js`, checks that every
-`param="..."` names a real parameter of the plugin (from `make describe`), and writes
-`faceplates/<Plugin>.html` next to the unit files and `catalog.json`.
+A faceplate is one file, `<Plugin>.html`, at most 256 KB with everything inlined, stored gzip
+compressed in the unit file's resources (the SDK README's *File format*). Name it in the
+Makefile and `mkunit.py` puts it in:
+
+```make
+FACEPLATES := EQ=faceplates/EQ.html Delay=faceplates/Delay.html
+```
+
+`tools/unitfile.py` lists a file's faceplates, adds or replaces them in a built file, extracts
+one, or strips them all (for firmware from before resources, which refuses a file that has them).
+metalhead-essentials' `tools/build-store.py` inlines `kit.css`/`kit.js`, checks that every
+`param="..."` names a real parameter of the plugin (from `make describe`), and adds the result to
+both boards' unit files for the store, which takes its demos from those files too.
 
 `make describe` (tools/describe.c) prints a unit file's plugins and parameters as JSON, with
 `texts`: the unit's own text for values across each parameter's range. The store's demos use

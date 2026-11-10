@@ -2,7 +2,10 @@
 """Convert a unit ELF (linked with unit.ld, -pie) into a loadable .unt file.
 
 The .unt layout is described in include/unit_abi.h:
-    UnitFileHeader (64 bytes) | image | relocation offsets (uint32 each)
+    UnitFileHeader (64 bytes) | image | relocation offsets (uint32 each) | resources
+
+--faceplate Plugin=file.html (repeatable) puts a plugin's faceplate into the file's resources,
+gzip compressed (tools/unitfile.py; doc/faceplates.md).
 
 32-bit ARM (BeagleBone Black) and 64-bit ARM (Raspberry Pi 5) units; the file's machine
 field says which. Only relative relocations are allowed (R_ARM_RELATIVE, R_AARCH64_RELATIVE):
@@ -11,9 +14,13 @@ function), which the loader can't resolve. The loader adds the load address to t
 each listed offset, so for AArch64 (RELA, the value is in the relocation) the value is written
 into the image first.
 """
+import os
 import struct
 import sys
 import zlib
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import unitfile  # noqa: E402
 
 UNIT_FILE_MAGIC = 0x31544E55     # "UNT1"
 UNIT_IMAGE_MAGIC = 0x54494E55    # "UNIT"
@@ -118,9 +125,20 @@ class Elf:
 
 
 def main():
-    if len(sys.argv) != 3:
-        sys.exit('usage: mkunit.py unit.elf unit.unt')
-    elf = Elf(open(sys.argv[1], 'rb').read())
+    args, faceplates = [], {}
+    argv = sys.argv[1:]
+    while argv:
+        arg = argv.pop(0)
+        if arg == '--faceplate' and argv:
+            plugin, sep, file = argv.pop(0).partition('=')
+            if not sep or not plugin:
+                fail('--faceplate takes Plugin=file.html')
+            faceplates[plugin] = open(file, 'rb').read()
+        else:
+            args.append(arg)
+    if len(args) != 2:
+        sys.exit('usage: mkunit.py [--faceplate Plugin=file.html ...] unit.elf unit.unt')
+    elf = Elf(open(args[0], 'rb').read())
     data = elf.data
     if not elf.segments:
         fail('no loadable segments')
@@ -178,11 +196,18 @@ def main():
     body = bytes(image) + struct.pack(f'<{len(relocs)}I', *relocs)
     header = struct.pack(HEADER_FORMAT, UNIT_FILE_MAGIC, abi, HEADER_SIZE, image_size, bss_size,
                          len(relocs), entry, zlib.crc32(body), elf.machine, name)
-    with open(sys.argv[2], 'wb') as f:
-        f.write(header + body)
+    out = header + body
+    if faceplates:
+        try:
+            out = unitfile.with_faceplates(out, faceplates)
+        except unitfile.UnitFileError as e:
+            fail(str(e))
+    with open(args[1], 'wb') as f:
+        f.write(out)
     machine = 'arm32' if elf.machine == UNIT_MACHINE_ARM32 else 'aarch64'
-    print(f'{sys.argv[2]}: {type_name.decode()} ABI {abi} {machine}, image {image_size} bytes, '
-          f'bss {bss_size} bytes, {len(relocs)} relocations, entry 0x{entry:x}')
+    print(f'{args[1]}: {type_name.decode()} ABI {abi} {machine}, image {image_size} bytes, '
+          f'bss {bss_size} bytes, {len(relocs)} relocations, entry 0x{entry:x}'
+          + (f', faceplates for {", ".join(faceplates)}' if faceplates else ''))
 
 
 if __name__ == '__main__':
