@@ -51,7 +51,7 @@
 #define MAX_POOL_CHUNKS         2048
 #define NO_CHUNK                (-1)
 
-// Pool sizes to try, largest first: the unit heap (64 MB) is shared with other units.
+// Pool sizes to try, largest first: the unit heap (64 MB on older firmware) is shared with other units.
 static const uint16_t poolSizesMB[] = { 56, 48, 40, 32, 24, 16, 8 };
 
 #define LOOP_FADE_SECONDS       0.02    // crossfade at the loop end with the audio before its start

@@ -96,7 +96,7 @@ There is no dynamic linking. A unit can't call firmware functions or the C libra
 gets exactly two things from the host:
 
 - `UnitHostApi`, passed to `unit_entry` (and on to the plugin entry functions): `log()`,
-  `allocate()` (memory for the rest of the unit's life, from a shared 64 MB heap) and read-only
+  `allocate()` (memory for the rest of the unit's life, from a heap shared by all units: 256 MB on the Pi 5, 192 MB on the BBB, 64 MB on older firmware) and read-only
   SD card access (`fileSize`, `readFile`, `readDirectory`). It's a versioned table: new services
   are appended, and units check `UNIT_HOST_HAS(api, field)` before using one, so a unit still
   loads on older firmware. File access is only allowed from `unit_entry()` and
@@ -340,7 +340,7 @@ loaded yet. Its reply is `@unitput ok <name> loaded|unchanged|reboot` or
 ## Limits (for now)
 
 - 8 MB pool for all units' code and static data, 2 MB per file, 16 unit files, 32 plugins and
-  1024 parameters in total; 64 MB heap for `allocate()`.
+  1024 parameters in total; a 256 MB (Pi 5) or 192 MB (BBB) heap for `allocate()`, 64 MB on older firmware.
 - Units are never unloaded, so replacing one, or freeing its instances, takes a reboot.
 - Files are read-only, and only while loading. No network or USB access from a unit; only what
   the two tables provide.

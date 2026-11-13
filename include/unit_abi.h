@@ -198,7 +198,8 @@ typedef struct UnitHostApi {
     void (*log)(const char * format, ...);
 
     // Memory for the rest of the unit's life (never freed), 8-byte aligned and not zeroed.
-    // Returns NULL when the unit heap (64 MB, shared by all units) is exhausted.
+    // Returns NULL when the unit heap (shared by all units: 256 MB on the Raspberry Pi 5, 192 MB
+    // on the BeagleBone Black, 64 MB in firmware before 2026-11-13) is exhausted.
     void * (*allocate)(size_t size);
 
     // Files on the SD card, by absolute path ("/samples/drums/kick.wav"). Only call these
