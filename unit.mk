@@ -20,7 +20,7 @@
 # Output, one per board (upload the one for yours with the web UI, or copy it to /units/
 # on the SD card):
 #   $(BUILD)/arm32/$(NAME).unt      BeagleBone Black
-#   $(BUILD)/aarch64/$(NAME).unt    Raspberry Pi 5
+#   $(BUILD)/aarch64/$(NAME).unt    Raspberry Pi 4 and 5
 # `make arm32` or `make aarch64` builds just one.
 
 UNITS_DIR := $(patsubst %/,%,$(dir $(lastword $(MAKEFILE_LIST))))
@@ -33,12 +33,14 @@ OBJDUMP_arm32 := $(CROSSPATH)/arm-none-eabi-objdump
 LIBGCC_arm32 ?= /Applications/ARM/lib/gcc/arm-none-eabi/14.3.1/arm/v5te/hard/libgcc.a
 CFLAGS_arm32 := -mcpu=cortex-a8 -mfpu=neon -mfloat-abi=hard -marm
 
-# Raspberry Pi 5: the same toolchain as metalhead-firmware's rpi5/metalhead
+# Raspberry Pi 4 and 5: the same toolchain as metalhead-firmware's rpi5/metalhead. One file for
+# both, so ARMv8.0 code (the Pi 4's Cortex-A72 has none of the Pi 5's ARMv8.2: no LSE atomics,
+# dot product or half-precision arithmetic), scheduled for the Pi 5's Cortex-A76
 CROSSPATH_AARCH64 ?= /Applications/ArmGNUToolchain/15.3.rel2/aarch64-none-elf/bin
 CC_aarch64 := $(CROSSPATH_AARCH64)/aarch64-none-elf-gcc
 OBJDUMP_aarch64 := $(CROSSPATH_AARCH64)/aarch64-none-elf-objdump
 LIBGCC_aarch64 ?= $(shell $(CC_aarch64) -print-libgcc-file-name)
-CFLAGS_aarch64 := -mcpu=cortex-a76
+CFLAGS_aarch64 := -march=armv8-a+crc -mtune=cortex-a76
 
 CXX_arm32 := $(CROSSPATH)/arm-none-eabi-g++
 LIBM_arm32 ?= /Applications/ARM/arm-none-eabi/lib/arm/v5te/hard/libm.a

@@ -7,7 +7,7 @@ The .unt layout is described in include/unit_abi.h:
 --faceplate Plugin=file.html (repeatable) puts a plugin's faceplate into the file's resources,
 gzip compressed (tools/unitfile.py; doc/faceplates.md).
 
-32-bit ARM (BeagleBone Black) and 64-bit ARM (Raspberry Pi 5) units; the file's machine
+32-bit ARM (BeagleBone Black) and 64-bit ARM (Raspberry Pi 4 and 5) units; the file's machine
 field says which. Only relative relocations are allowed (R_ARM_RELATIVE, R_AARCH64_RELATIVE):
 anything else means the unit references a symbol that isn't in the image (e.g. a C library
 function), which the loader can't resolve. The loader adds the load address to the word at

@@ -341,7 +341,7 @@ FIELD_INFO = {
         'relocCount': ('uint32_t', 'uint32 offsets after the image'),
         'entryOffset': ('uint32_t', 'offset of unit_entry in the image'),
         'crc32': ('uint32_t', 'IEEE CRC-32 (zlib.crc32) of everything after this header'),
-        'machine': ('uint32_t', '0 = 32-bit ARM (BeagleBone Black), 1 = 64-bit ARM (Raspberry Pi 5)'),
+        'machine': ('uint32_t', '0 = 32-bit ARM (BeagleBone Black), 1 = 64-bit ARM (Raspberry Pi 4 and 5)'),
         'name': ('char[32]', 'unit file name (/units/&lt;name&gt;.unt), NUL-terminated, [A-Za-z0-9_]{1,31}'),
     },
     'UnitImageHeader': {
@@ -427,7 +427,7 @@ def build(out):
           'descriptor, parameter infos with plain value ranges, and parameter events. This document summarises the '
           f'binary interface: what a unit file contains, how it is loaded, which functions run where, and the exact '
           f'layout of every structure. The source of truth is {code("include/unit_abi.h")}; offsets and '
-          'sizes below come from the ARM compiler (BeagleBone Black; on the Raspberry Pi 5 pointers are 8 bytes).'),
+          'sizes below come from the ARM compiler (BeagleBone Black; on the Raspberry Pis pointers are 8 bytes).'),
         Spacer(1, 3 * mm),
     ]
     tiles = [

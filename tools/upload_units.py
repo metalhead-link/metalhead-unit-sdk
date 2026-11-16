@@ -121,7 +121,7 @@ def put_unit(fd, path):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
     parser.add_argument('units', nargs='*', help='bundle or directory names (default: the ones on the device)')
-    parser.add_argument('--bbb', action='store_true', help='build for the BeagleBone Black (default: Raspberry Pi 5)')
+    parser.add_argument('--bbb', action='store_true', help='build for the BeagleBone Black (default: Raspberry Pi 4 or 5)')
     parser.add_argument('--build-only', action='store_true', help="build, don't upload")
     parser.add_argument('--reboot', action='store_true', help='reboot the device when a replaced unit needs it')
     parser.add_argument('--dir', action='append', default=[], metavar='DIR',

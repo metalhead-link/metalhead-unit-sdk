@@ -20,18 +20,22 @@ vu VUMeter
 
 ```sh
 cd vumeter && make                  # → build/arm32/vumeter.unt   (BeagleBone Black)
-                                    #   build/aarch64/vumeter.unt (Raspberry Pi 5)
+                                    #   build/aarch64/vumeter.unt (Raspberry Pi 4 and 5)
 make test                           # runs the plugins on the Mac (tools/unittest.c)
 ```
 
-A unit binary is built for one board: upload the one for yours. The other board refuses it
-("built for 32-bit ARM (BeagleBone Black), this is 64-bit ARM (Raspberry Pi 5)") instead of
-running it. `make arm32` or `make aarch64` builds just one.
+A unit binary is built for one CPU: upload the one for yours. The Raspberry Pi 4 and 5 run the same
+`aarch64` file (ARMv8.0 code, which the Pi 4's Cortex-A72 runs and the Pi 5's Cortex-A76 too); the
+BeagleBone refuses it, and the Pis the `arm32` one ("built for 32-bit ARM (BeagleBone Black), this is
+64-bit ARM (Raspberry Pi 4 or 5)"), instead of running it. `make arm32` or `make aarch64` builds
+just one.
 
-Both boards are supported, and a unit is meant to work on both. The BeagleBone is much slower (a
-1 GHz Cortex-A8 with single-precision NEON, against the Pi's 2.4 GHz Cortex-A76), so check a new
-unit's CPU use per USB microframe in the live view on a BBB before releasing it. A plugin too heavy
-for the BBB goes on the Pi's list only (see *Writing a unit*); say so in the unit's README.
+All three boards are supported, and a unit is meant to work on each. They differ a lot in speed: the
+Raspberry Pi 5 has a 2.4 GHz Cortex-A76, the Pi 4 a 1.5 or 1.8 GHz Cortex-A72 (some two to three
+times slower), the BeagleBone a 1 GHz Cortex-A8 with single-precision NEON (much slower again), so
+check a new unit's CPU use per USB microframe in the live view on a BBB before releasing it, or on a
+Pi 4 for one that is Pi-only. A plugin too heavy for the BBB goes on the Pis' list only (see
+*Writing a unit*); say so in the unit's README.
 
 One file can hold several plugins (a **bundle**, like a CLAP file): `stock/` builds all the
 examples below into one `Stock.unt`. Each example directory also builds its plugin on its own;
@@ -96,7 +100,7 @@ There is no dynamic linking. A unit can't call firmware functions or the C libra
 gets exactly two things from the host:
 
 - `UnitHostApi`, passed to `unit_entry` (and on to the plugin entry functions): `log()`,
-  `allocate()` (memory for the rest of the unit's life, from a heap shared by all units: 256 MB on the Pi 5, 192 MB on the BBB, 64 MB on older firmware) and read-only
+  `allocate()` (memory for the rest of the unit's life, from a heap shared by all units: 256 MB on the Pis, 192 MB on the BBB, 64 MB on older firmware) and read-only
   SD card access (`fileSize`, `readFile`, `readDirectory`). It's a versioned table: new services
   are appended, and units check `UNIT_HOST_HAS(api, field)` before using one, so a unit still
   loads on older firmware. File access is only allowed from `unit_entry()` and
@@ -340,7 +344,7 @@ loaded yet. Its reply is `@unitput ok <name> loaded|unchanged|reboot` or
 ## Limits (for now)
 
 - 8 MB pool for all units' code and static data, 2 MB per file, 16 unit files, 32 plugins and
-  1024 parameters in total; a 256 MB (Pi 5) or 192 MB (BBB) heap for `allocate()`, 64 MB on older firmware.
+  1024 parameters in total; a 256 MB (Pi 4, Pi 5) or 192 MB (BBB) heap for `allocate()`, 64 MB on older firmware.
 - Units are never unloaded, so replacing one, or freeing its instances, takes a reboot.
 - Files are read-only, and only while loading. No network or USB access from a unit; only what
   the two tables provide.

@@ -198,8 +198,8 @@ typedef struct UnitHostApi {
     void (*log)(const char * format, ...);
 
     // Memory for the rest of the unit's life (never freed), 8-byte aligned and not zeroed.
-    // Returns NULL when the unit heap (shared by all units: 256 MB on the Raspberry Pi 5, 192 MB
-    // on the BeagleBone Black, 64 MB in firmware before 2026-11-13) is exhausted.
+    // Returns NULL when the unit heap (shared by all units: 256 MB on the Raspberry Pi 4 and 5,
+    // 192 MB on the BeagleBone Black, 64 MB in firmware before 2026-11-13) is exhausted.
     void * (*allocate)(size_t size);
 
     // Files on the SD card, by absolute path ("/samples/drums/kick.wav"). Only call these
@@ -311,7 +311,7 @@ typedef struct UnitImageHeader {
 #define UNIT_FILE_MAGIC         0x31544E55u     // "UNT1"
 
 #define UNIT_MACHINE_ARM32      0       // BeagleBone Black: Cortex-A8, ARM state, hard float
-#define UNIT_MACHINE_AARCH64    1       // Raspberry Pi 5: Cortex-A76, 64-bit
+#define UNIT_MACHINE_AARCH64    1       // Raspberry Pi 4 and 5: ARMv8.0 (Cortex-A72, -A76), 64-bit
 #if defined(__aarch64__)
 #define UNIT_MACHINE            UNIT_MACHINE_AARCH64
 #else
