@@ -69,7 +69,7 @@ typedef struct UnitMidiPacket {
 #define UNIT_PARAM_IS_PERIODIC      (1u << 1)   // wraps around, like a phase
 #define UNIT_PARAM_IS_HIDDEN        (1u << 2)   // not shown in user interfaces
 #define UNIT_PARAM_IS_READONLY      (1u << 3)   // the plugin's output, the host doesn't set it
-#define UNIT_PARAM_IS_BYPASS        (1u << 4)   // the plugin's bypass switch
+#define UNIT_PARAM_IS_BYPASS        (1u << 4)   // a bypass switch: an effect's is replaced by the firmware's own (README)
 #define UNIT_PARAM_IS_AUTOMATABLE   (1u << 5)
 #define UNIT_PARAM_IS_ENUM          (1u << 16)  // stepped, and paramValueToText names the values
 // Not in CLAP: every event is an action (a button press, a drum hit with the value as its

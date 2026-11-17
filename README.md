@@ -175,6 +175,12 @@ typedef struct UnitParamEvent {
   (ClickTrack's `play`, Looper's `record`) or a drum hit whose value is the velocity. It has no
   value for `getParamValue`; a UI shows a button. The built-in buttons act on a full press,
   `value >= 1.0` (cc value 127), as they did on `midiValue == 127`.
+- Bypass is the firmware's, outside the unit: every effect (a plugin with audio inputs and
+  outputs) gets a `bypass` parameter that passes its input straight to its outputs, fading over
+  5 ms, while `process()` keeps running on silence. Don't add a bypass of your own; a parameter
+  flagged `UNIT_PARAM_IS_BYPASS` is left out of an effect's parameters, and a parameter named
+  `bypass` without that flag means the effect gets no bypass. The id `0xFFFFFFFE` is the
+  firmware's.
 - Unlike CLAP, parameters belong to the plugin, not to an instance, and don't change after
   `unit_entry()`: `config.txt` and the web UI refer to them before any instance exists.
 - `getParamValue` is called from the main loop and can be interrupted by `process()`: return a
