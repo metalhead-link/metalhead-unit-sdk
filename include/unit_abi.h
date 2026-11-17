@@ -18,8 +18,19 @@
  *   - Anything else is a new UNIT_ABI_VERSION; the loader refuses units built for another one.
  *
  * Calling convention: AAPCS with hard float (VFP/NEON registers), ARM (not Thumb) code for
- * Cortex-A8. process() runs in the audio interrupt; units must not block, and may use
- * floating point and NEON freely (the IRQ handler saves the full VFP/NEON state).
+ * Cortex-A8; AAPCS64 for the Raspberry Pi. process() runs in the audio interrupt; units must not
+ * block, and may use floating point and NEON freely (the IRQ handler saves the full VFP/NEON
+ * state).
+ *
+ * Units run unprivileged (README.md, "Units run unprivileged"): ARM user mode on the BeagleBone
+ * Black, EL1 under the firmware's stage-2 translation on the Raspberry Pi. A unit may touch its
+ * own code and data, memory from allocate(), its stack (32 KB) and what the firmware passes it,
+ * nothing else: no firmware memory, no hardware, no system registers, no cycle counter, no
+ * wfi/smc. Anything else, or running off the stack, is a fault: the device reports it (as
+ * Unit+offset into the unit's image) and switches that plugin off until a reboot; the rest of
+ * the device keeps playing. Every pointer handed to the firmware must point into unit memory.
+ * Floating-point control (FPSCR, FPCR: rounding, flush-to-zero) is the firmware's again after
+ * every call, so set it at the start of each process() if you change it.
  */
 #ifndef UNIT_ABI_H_
 #define UNIT_ABI_H_
@@ -125,6 +136,7 @@ typedef struct UnitProcessHost {
     // events are delivered per block for all units together; extra events are dropped.
     void (*sendMIDIEvent)(struct UnitHostData * hostData, UnitMidiPacket packet);
     UnitTimeInfo timeInfo;
+    // Opaque: pass it to sendMIDIEvent unchanged. It may be NULL; don't test or dereference it.
     struct UnitHostData * hostData;
     // MIDI routed to this unit by [midiroutes] (e.g. ".Launchpad_Mini_MK3 grid") that arrived
     // since the last block, in order. Shares the 16 events per block limit of incoming MIDI.
@@ -143,7 +155,9 @@ typedef struct UnitProcessHost {
 typedef struct UnitPlugin {
     uint32_t size;              // sizeof(UnitPlugin) the unit was built with
 
-    // clap_plugin_descriptor
+    // clap_plugin_descriptor. The strings, getNumInputs(), getNumOutputs() and getParamCount()
+    // are read once, when the unit loads, as is this whole structure: changing them later
+    // changes nothing.
     const char * name;          // the type name used in [units]: [A-Za-z0-9_]{1,31}
     const char * vendor;        // may be NULL
     const char * version;       // may be NULL, e.g. "1.2.0"
@@ -170,7 +184,9 @@ typedef struct UnitPlugin {
 
     // Called once per audio block (one USB frame, frameCount samples per channel).
     // Unconnected inputs contain silence; outputs start zeroed. Parameter events come first,
-    // in the order they happened; apply them before processing the block.
+    // in the order they happened; apply them before processing the block. At most 64 inputs
+    // and 64 outputs, and (inputs + outputs) * frameCount of at most 8192 samples: a plugin
+    // with more is not called and its outputs stay silent.
     void (*process)(void * instance, UnitProcessHost * host,
                     size_t nrInChannels, float ** inSamples,
                     size_t nrOutChannels, float ** outSamples,
@@ -194,7 +210,10 @@ typedef struct UnitHostApi {
 
     // printf-style logging to the device console (newlib vsnprintf, so %f works). Safe from
     // process(): messages are queued and printed from the main loop; longer than 255
-    // characters is truncated, and messages are dropped when the queue (64) is full.
+    // characters is truncated, and messages are dropped when the queue (64) is full. The
+    // firmware checks the format against its arguments first: %n and * widths are refused,
+    // every %s must be a string in unit memory, and only about 7 arguments are checked (11
+    // words on the BBB). A line that fails is not printed; a note says why.
     void (*log)(const char * format, ...);
 
     // Memory for the rest of the unit's life (never freed), 8-byte aligned and not zeroed.
@@ -204,7 +223,9 @@ typedef struct UnitHostApi {
 
     // Files on the SD card, by absolute path ("/samples/drums/kick.wav"). Only call these
     // from unit_entry() or createInstance(), never from process(); they block on the SD card
-    // and refuse to run in interrupt context. Negative return values are errors.
+    // and refuse to run in interrupt context. Negative return values are errors. The device's
+    // secrets are refused, by name in any directory: *.key, connect-pair.txt, wifi.txt. Buffers
+    // and entries must lie in unit memory.
     int32_t (*fileSize)(const char * path);
     int32_t (*readFile)(const char * path, uint32_t offset, void * buffer, uint32_t length);  // bytes read
     // Directory entry number `index` (0, 1, 2, ...): returns 1 and fills `entry`, 0 after the

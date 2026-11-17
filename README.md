@@ -347,11 +347,59 @@ loaded yet. Its reply is `@unitput ok <name> loaded|unchanged|reboot` or
 `@unitput error <reason>`. `unitls` lists `/units` with the plugins of each loaded file, and
 `unitrm <name>` deletes a file. See metalhead-firmware's `ccs/wormhole/src/configconsole.c`.
 
+## Units run unprivileged
+
+The firmware runs units with less privilege than itself: in ARM user mode on the BeagleBone
+Black, at EL1 below the firmware's EL2 on the Raspberry Pi. The MMU lets a unit reach its own
+code and data, memory from `allocate()`, its stack and what the firmware passes it, and nothing
+else: not the firmware (whose memory holds the device's key), not the hardware, not the files the
+firmware keeps to itself. It is what makes a unit from someone else safe to load, and what keeps
+a buggy unit from taking the device down.
+
+What that means when writing one:
+
+- **Stack: 32 KB** per call. Large buffers go in static memory or come from `allocate()` in
+  `unit_entry()`/`createInstance()`, not on the stack. `make stack` lists the largest frames.
+- **Pointers you hand the firmware** (buffers, strings, instances, a `%s` argument) must point
+  into unit memory. The firmware copies strings, `getParamInfo()` results and audio in and out,
+  and checks every pointer.
+- **Read once at load:** the plugin structure, its strings, `getNumInputs()`, `getNumOutputs()`
+  and `getParamCount()`. Keep them constant.
+- **Floating-point control** (rounding, flush-to-zero) is the firmware's again after every call:
+  set it at the start of each `process()` if you change it.
+- **Not for units:** firmware memory, hardware registers, system registers, the cycle counter and
+  other performance counters, `wfi`/`wfe`, `smc`, `svc` other than the firmware's stubs. Files
+  named `*.key`, `connect-pair.txt` and `wifi.txt` are refused in any directory.
+- **`log()`** checks its format against the arguments: `%n` and `*` widths are refused, and every
+  `%s` must be a string in unit memory. A line that fails is dropped, with a note saying why.
+
+Breaking one of these is a fault. The device prints a report on its consoles, naming the code by
+unit and offset into the unit's image, then switches that plugin off (its outputs go silent)
+until a reboot. The other units and the device carry on:
+
+```
+Unit plugin CrashTest (unit file CrashTest) crashed, switched off until a reboot:
+  *** data abort: translation: not unit memory, write at 0x000080000000 (ESR 0x939f0045)
+  pc 0x000000a230c0 [CrashTest+0x00c0]  lr 0x000000a2317c [CrashTest+0x017c]
+```
+
+The offsets are addresses in the unit's ELF, which the build keeps next to the `.unt`:
+
+```sh
+aarch64-none-elf-addr2line -f -e build/aarch64/crashtest.elf 0xc0 0x178   # lr minus 4: the call
+arm-none-eabi-addr2line -f -e build/arm32/crashtest.elf 0xa4
+```
+
+A report that says the unit's sp is below its stack is a stack overflow.
+
 ## Limits (for now)
 
 - 8 MB pool for all units' code and static data, 2 MB per file, 16 unit files, 32 plugins and
   1024 parameters in total; a 256 MB (Pi 4, Pi 5) or 192 MB (BBB) heap for `allocate()`, 64 MB on older firmware.
-- Units are never unloaded, so replacing one, or freeing its instances, takes a reboot.
+- 32 KB of stack per call; at most 64 inputs and 64 outputs, and 8192 samples (inputs plus
+  outputs, times frames) per block.
+- Units are never unloaded, so replacing one, or freeing its instances, takes a reboot. A
+  plugin that crashed stays off until then.
 - Files are read-only, and only while loading. No network or USB access from a unit; only what
   the two tables provide.
 - Parameter changes arrive at the start of the block (`time` is 0), and units can't report

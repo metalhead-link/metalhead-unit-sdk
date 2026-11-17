@@ -47,7 +47,9 @@ LIBM_arm32 ?= /Applications/ARM/arm-none-eabi/lib/arm/v5te/hard/libm.a
 CXX_aarch64 := $(CROSSPATH_AARCH64)/aarch64-none-elf-g++
 LIBM_aarch64 ?= $(shell $(CC_aarch64) -print-file-name=libm.a)
 
-COMMON_FLAGS := -O2 -g -Wall \
+# -fstack-usage: a .su file per object with each function's stack frame, for `make stack`
+# (a unit gets 32 KB of stack on the device)
+COMMON_FLAGS := -O2 -g -Wall -fstack-usage \
 		-fpie -fno-common \
 		-fno-exceptions -fno-unwind-tables -fno-asynchronous-unwind-tables \
 		-ffunction-sections -fdata-sections \
@@ -163,7 +165,14 @@ $(BUILD)/describe.json: $(BUILD)/host/describe
 
 describe: $(BUILD)/describe.json
 
+# The largest stack frames, per machine. A unit gets 32 KB of stack on the device; recursion and
+# calls nest frames, so leave room. Overflowing it stops the plugin (README.md).
+stack: all
+	@for m in $(MACHINES); do echo "$$m:"; cat $(BUILD)/$$m/*.su 2>/dev/null | \
+		awk -F '\t' '{ print $$2 "\t" $$1 }' | sort -n -r | head -8 | \
+		awk -F '\t' '{ printf "  %6d bytes  %s\n", $$1, $$2 }'; done
+
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all clean test describe FORCE $(MACHINES) $(foreach m,$(MACHINES),disasm-$(m))
+.PHONY: all clean test describe stack FORCE $(MACHINES) $(foreach m,$(MACHINES),disasm-$(m))
