@@ -309,7 +309,8 @@ checks the factory, the descriptors and parameters, sets every parameter to its 
 and default and expects `getParamValue` to report them back, presses the triggers, and releases
 and recreates an instance (`TEST_ARGS="-v -r <folder>"` lists the parameters and serves files
 from a folder; `-w <folder>` renders each plugin to a WAV there, playing notes into `midiIn` and a
-plucked sawtooth into its inputs, in blocks of 1 to 64 frames). metalhead-firmware's `ccs/make-all.sh` builds every unit directory listed in it.
+plucked sawtooth into its inputs, in blocks of 1 to 64 frames; `-l <seconds>` for longer, and
+`-s Plugin.param=value` sets a parameter for the render, as the store's sound samples do). metalhead-firmware's `ccs/make-all.sh` builds every unit directory listed in it.
 
 ### Faceplates
 

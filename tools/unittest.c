@@ -7,12 +7,14 @@
  * and runs process() with parameter events: every settable parameter is set to its minimum,
  * maximum and default, and getParamValue() has to report each value back.
  *
- *   build/host/unittest [-r <sd card folder>] [-v] [-w <folder>]
+ *   build/host/unittest [-r <sd card folder>] [-v] [-w <folder>] [-l <seconds>] [-s Plugin.param=value ...]
  *
  * -r maps the unit's file access (/samples/drums/...) to a folder on the Mac; without it the
  * unit sees no files. -v prints every parameter. -w renders a few seconds of each plugin at its
  * defaults, playing notes into midiIn and a plucked sawtooth into its inputs, to
- * <folder>/<plugin>.wav (outputs 1 and 2). Exits with 1 if anything failed.
+ * <folder>/<plugin>.wav (outputs 1 and 2). -l sets how long (default 4 s, at most 16); -s sets a
+ * parameter for the render (plain value; repeat it for more): the store's sound samples play
+ * each plugin with settings that show it off. Exits with 1 if anything failed.
  *
  * The native build differs from the device: other compiler, other libc (memcpy and friends),
  * no relocations. It tests the plugin logic and the ABI usage, not the code generation.
@@ -33,6 +35,10 @@
 
 static const char * root;
 static const char * renderFolder;
+static int renderSeconds = 4;
+// -s Plugin.param=value: a setting for the render
+static struct { const char * plugin; size_t pluginLength; const char * param; size_t paramLength; double value; } settings[MAX_EVENTS * 4];
+static int settingCount;
 static int verbose;
 static int failures;
 static int midiSent;
@@ -304,8 +310,8 @@ static void testPlugin(const UnitPlugin * plugin, uint32_t index) {
 
 // --- Rendering (-w) ---------------------------------------------------------------------------
 
-#define RENDER_SECONDS  4
-#define RENDER_FRAMES   (RENDER_SECONDS * 48000)
+#define MAX_RENDER_SECONDS 16
+#define MAX_RENDER_FRAMES  (MAX_RENDER_SECONDS * 48000)
 
 static void writeWav(const char * path, const float * left, const float * right, int frames) {
     FILE * f = fopen(path, "wb");
@@ -335,7 +341,8 @@ static void writeWav(const char * path, const float * left, const float * right,
 // after 0.3 s), a plucked sawtooth at the same pitch into every input. Blocks of varying size,
 // from 1 to 64 frames, as the Pi (6 per microframe) and the BeagleBone (about 48) both send.
 static void renderPlugin(const UnitPlugin * plugin) {
-    static float left[RENDER_FRAMES], right[RENDER_FRAMES];
+    static float left[MAX_RENDER_FRAMES], right[MAX_RENDER_FRAMES];
+    const int RENDER_FRAMES = renderSeconds * 48000;
     static float inBuffers[MAX_CHANNELS][64], outBuffers[MAX_CHANNELS][64];
     static const uint8_t notes[] = { 48, 52, 55, 60 };
     float * in[MAX_CHANNELS];
@@ -348,6 +355,25 @@ static void renderPlugin(const UnitPlugin * plugin) {
     }
     memset(left, 0, sizeof(left));
     memset(right, 0, sizeof(right));
+    // The -s settings for this plugin, sent with the first block
+    UnitParamEvent events[MAX_EVENTS];
+    size_t eventCount = 0;
+    for (int s = 0; s < settingCount; s++) {
+        if (settings[s].pluginLength != strlen(plugin->name) || strncmp(settings[s].plugin, plugin->name, settings[s].pluginLength) != 0) {
+            continue;
+        }
+        UnitParamInfo info;
+        int found = 0;
+        for (uint32_t i = 0; i < plugin->getParamCount() && !found; i++) {
+            found = plugin->getParamInfo(i, &info) && strlen(info.name) == settings[s].paramLength &&
+                    strncmp(info.name, settings[s].param, settings[s].paramLength) == 0;
+        }
+        CHECK(found, "%s has no parameter %.*s (-s)", plugin->name, (int)settings[s].paramLength, settings[s].param);
+        CHECK(eventCount < MAX_EVENTS, "%s: more than %d -s settings", plugin->name, MAX_EVENTS);
+        if (found && eventCount < MAX_EVENTS) {
+            events[eventCount++] = (UnitParamEvent) { .time = 0, .id = info.id, .value = settings[s].value };
+        }
+    }
     double phase = 0;
     uint32_t random = 1;
     clock_t start = clock();
@@ -395,7 +421,7 @@ static void renderPlugin(const UnitPlugin * plugin) {
             },
             .midiIn = midi, .midiInCount = midiCount,
         };
-        plugin->process(instance, &host, inputs, in, outputs, out, frames, 0, 0);
+        plugin->process(instance, &host, inputs, in, outputs, out, frames, pos == 0 ? events : 0, pos == 0 ? eventCount : 0);
         for (int i = 0; i < frames; i++) {
             left[pos + i] = outputs > 0 ? outBuffers[0][i] : 0;
             right[pos + i] = outputs > 1 ? outBuffers[1][i] : left[pos + i];
@@ -415,7 +441,7 @@ static void renderPlugin(const UnitPlugin * plugin) {
     snprintf(path, sizeof(path), "%s/%s.wav", renderFolder, plugin->name);
     writeWav(path, left, right, RENDER_FRAMES);
     printf("  rendered %s: peak %.3f, rms %.4f, %.1f%% of real time on this Mac (sanitized build)\n",
-           path, peak, sqrt(sum / (2.0 * RENDER_FRAMES)), 100 * seconds / RENDER_SECONDS);
+           path, peak, sqrt(sum / (2.0 * RENDER_FRAMES)), 100 * seconds / renderSeconds);
     CHECK(finite, "%s: rendered output is not finite", plugin->name);
     CHECK(outputs == 0 || peak > 1e-4F, "%s: rendered silence", plugin->name);
     if (plugin->releaseInstance) {
@@ -431,8 +457,21 @@ int main(int argc, char ** argv) {
             verbose = 1;
         } else if (strcmp(argv[i], "-w") == 0 && i + 1 < argc) {
             renderFolder = argv[++i];
+        } else if (strcmp(argv[i], "-l") == 0 && i + 1 < argc && atoi(argv[i + 1]) >= 1 && atoi(argv[i + 1]) <= MAX_RENDER_SECONDS) {
+            renderSeconds = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "-s") == 0 && i + 1 < argc && settingCount < (int)(sizeof(settings) / sizeof(settings[0])) &&
+                   strchr(argv[i + 1], '.') && strchr(argv[i + 1], '=') > strchr(argv[i + 1], '.')) {
+            const char * a = argv[++i];
+            const char * dot = strchr(a, '.');
+            const char * eq = strchr(a, '=');
+            settings[settingCount].plugin = a;
+            settings[settingCount].pluginLength = (size_t)(dot - a);
+            settings[settingCount].param = dot + 1;
+            settings[settingCount].paramLength = (size_t)(eq - dot - 1);
+            settings[settingCount].value = atof(eq + 1);
+            settingCount++;
         } else {
-            fprintf(stderr, "usage: %s [-r <sd card folder>] [-v] [-w <folder>]\n", argv[0]);
+            fprintf(stderr, "usage: %s [-r <sd card folder>] [-v] [-w <folder>] [-l <seconds>] [-s Plugin.param=value ...]\n", argv[0]);
             return 2;
         }
     }
